@@ -111,7 +111,27 @@ Upstream maintainers intended this reset to clear inconsistent boot-firmware Dis
 | `setup_usb4_boot.sh --rollback` | Completely reverses all configuration changes and restores backup initrd. |
 | `setup_usb4_boot.sh --verify` | Runtime check of PCIe link speed (16.0 GT/s), width (x4), and HMB status. |
 | `setup_usb4_boot.sh --health` | Audits SMART attributes, drive temperature, TBW endurance, and HMB state. |
-| `tests/run_all_tests.sh` | Automated test harness validating CLI options and patch file integrity. |
+| `packaging/build_deb.sh` | Builds standalone `.deb` package (`dist/usb4-nvme-direct-boot_1.0.0_all.deb`). |
+| `tests/run_all_tests.sh` | Master automated test suite (CLI flags, kernel patch validation, .deb build). |
+
+---
+
+### Standalone Debian/Ubuntu Package (`.deb`)
+
+For systems requiring distribution package tracking instead of executing raw shell scripts:
+
+```bash
+# Build the package locally
+./packaging/build_deb.sh
+
+# Install via dpkg/apt
+sudo dpkg -i dist/usb4-nvme-direct-boot_1.0.0_all.deb
+
+# Once installed, management is available globally via:
+sudo usb4-boot-config --audit
+sudo usb4-boot-config --dry-run
+sudo usb4-boot-config --apply
+```
 
 ---
 
@@ -125,8 +145,9 @@ usb4-nvme-direct-boot/
 ├── LICENSE                            # MIT License
 ├── .gitignore                         # Git ignore rules
 │
-├── .github/workflows/
-│   └── ci.yml                         # Automated CI linting and CLI test workflow
+├── packaging/                         # Debian packaging scripts & metadata
+│   ├── build_deb.sh                   # Automated .deb builder
+│   └── debian/DEBIAN/control          # Package control metadata
 │
 ├── scripts/                           # Core implementation scripts
 │   ├── apply_usb4_direct_boot_fix.sh  # Transaction-aware installer (dracut & initramfs-tools)
@@ -138,7 +159,8 @@ usb4-nvme-direct-boot/
 ├── tests/                             # Automated test suite
 │   ├── run_all_tests.sh               # Master test runner
 │   ├── test_cli.sh                    # CLI argument and flag verification harness
-│   └── test_patch_validation.sh       # Linux kernel patch structure and diff validator
+│   ├── test_patch_validation.sh       # Linux kernel patch structure and diff validator
+│   └── test_deb_packaging.sh          # Debian package builder & payload test
 │
 ├── patches/                           # Upstream Linux kernel proposals
 │   └── 0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch # Production C patch for drivers/thunderbolt/
