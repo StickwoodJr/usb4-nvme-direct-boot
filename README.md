@@ -109,7 +109,11 @@ usb4-nvme-direct-boot/
 │   ├── rollback_usb4_fix.sh           # Rollback script restoring pre-change state
 │   └── nvme_health_audit.sh           # SMART health, TBW, and HMB telemetry reader
 │
+├── patches/                           # Upstream Linux kernel patches
+│   └── 0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch # Upstream C patch for drivers/thunderbolt/
+│
 └── docs/                              # Technical documentation
+    ├── FORENSIC_KERNEL_INVESTIGATION_REPORT.md # Root-cause whitepaper & LKML submission
     ├── FRESH_INSTALL_PLAYBOOK.md      # Installation guide for new distributions
     ├── HARDWARE_ARCHITECTURE.md       # Technical notes on USB4 tunneling and HMB
     └── TROUBLESHOOTING.md             # Failure modes, recovery steps, and fallback behavior

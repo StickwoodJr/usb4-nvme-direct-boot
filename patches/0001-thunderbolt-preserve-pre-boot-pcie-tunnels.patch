@@ -1,0 +1,189 @@
+From: Upstream Linux Kernel Architect <investigator@kernel.org>
+Date: Sat, 19 Sep 2026 06:15:00 -0400
+Subject: [PATCH] thunderbolt: Preserve pre-boot PCIe tunnels for external boot storage
+
+In Linux 6.8+, commits 0fc70886569c ("thunderbolt: Reset USB4 v2 host
+router") and 59a54c5f3dbd ("thunderbolt: Reset topology created by the boot
+firmware") enabled default host router resetting (host_reset = true).
+
+On systems where the UEFI firmware created a PCIe tunnel to an external
+storage device (such as an NVMe drive hosting the root filesystem),
+issuing nhi_reset() in nhi_probe() on USB4 v2 or calling tb_switch_reset()
+in tb_start() on USB4 v1 abruptly tears down the physical PCIe tunnel while
+the kernel or initramfs is booting. This leaves downstream NVMe devices
+inaccessible (-ENODEV), triggers pciehp removal races, and results in a
+kernel panic or dracut boot timeout.
+
+The Thunderbolt driver already contains infrastructure to handle boot
+devices: tb_discover_tunnels() traverses existing PCIe tunnels, marks
+the upstream switches as sw->boot = true, and tb_scan_finalize_switch()
+authorizes them. However, unconditional host_reset and discover = false
+short-circuits this entire mechanism.
+
+Fix this regression by:
+1. Adding nhi_has_active_boot_device() in drivers/thunderbolt/nhi.c to check
+   if any sibling PCIe root port has active downstream devices before
+   issuing REG_RESET_HRR.
+2. In tb_start(), checking if the host router has an active PCIe downstream
+   adapter enabled by firmware before resetting. If active PCIe boot tunnels
+   or downstream storage devices are present, keep discover = true, skip
+   destructive resets, and allow tb_discover_tunnels() to adopt and
+   authorize the boot device.
+
+Fixes: 0fc70886569c ("thunderbolt: Reset USB4 v2 host router")
+Fixes: 59a54c5f3dbd ("thunderbolt: Reset topology created by the boot firmware")
+Link: https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764
+Cc: stable@vger.kernel.org # 6.8+
+Signed-off-by: Upstream Linux Kernel Architect <investigator@kernel.org>
+---
+ drivers/thunderbolt/nhi.c | 43 ++++++++++++++++++++++++++++++++++++++-
+ drivers/thunderbolt/tb.c  | 24 ++++++++++++++++++++--
+ 2 files changed, 64 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/thunderbolt/nhi.c b/drivers/thunderbolt/nhi.c
+index 8b9f71c48012..d3c907a014e2 100644
+--- a/drivers/thunderbolt/nhi.c
++++ b/drivers/thunderbolt/nhi.c
+@@ -17,6 +17,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/iommu.h>
+ #include <linux/module.h>
++#include <linux/pci.h>
+ #include <linux/delay.h>
+ #include <linux/property.h>
+ #include <linux/string_choices.h>
+@@ -1144,6 +1145,42 @@ void nhi_shutdown(struct tb_nhi *nhi)
+ 		nhi->ops->shutdown(nhi);
+ }
+ 
++/**
++ * nhi_has_active_boot_device() - Check if a sibling PCIe bridge has active children
++ * @nhi: Native Host Interface
++ *
++ * Checks if any sibling PCIe root port or bridge on the same root bus has
++ * active downstream devices already enumerated by boot firmware. This indicates
++ * that the pre-boot PCIe tunnel is actively being used (e.g. for external boot
++ * storage), and resetting the host router would sever the root filesystem.
++ */
++static bool nhi_has_active_boot_device(struct tb_nhi *nhi)
++{
++	struct pci_dev *pdev, *bridge = NULL;
++
++	if (!dev_is_pci(nhi->dev))
++		return false;
++
++	pdev = to_pci_dev(nhi->dev);
++
++	for_each_pci_dev(bridge) {
++		if (bridge->bus != pdev->bus)
++			continue;
++		if (!pci_is_bridge(bridge) || !bridge->subordinate)
++			continue;
++
++		/* Check if bridge is an external-facing or Thunderbolt port */
++		if ((bridge->external_facing || bridge->is_thunderbolt) &&
++		    !list_empty(&bridge->subordinate->devices)) {
++			pci_dev_put(bridge);
++			return true;
++		}
++	}
++
++	return false;
++}
++
+ static void nhi_reset(struct tb_nhi *nhi)
+ {
+ 	ktime_t timeout;
+@@ -1158,6 +1195,11 @@ static void nhi_reset(struct tb_nhi *nhi)
+ 		return;
+ 	}
+ 
++	if (nhi_has_active_boot_device(nhi)) {
++		dev_info(nhi->dev, "preserving pre-boot PCIe tunnel for active boot device\n");
++		return;
++	}
++
+ 	iowrite32(REG_RESET_HRR, nhi->iobase + REG_RESET);
+ 	msleep(100);
+ 
+@@ -1245,6 +1287,7 @@ int nhi_probe(struct tb_nhi *nhi)
+ 	if (!nhi->tx_rings || !nhi->rx_rings)
+ 		return -ENOMEM;
+ 
++	/* Reset host router only if not hosting active pre-boot devices */
+ 	nhi_reset(nhi);
+ 
+ 	/* In case someone left them on. */
+@@ -1276,6 +1319,9 @@ int nhi_probe(struct tb_nhi *nhi)
+ 
+ 	dev_dbg(dev, "NHI initialized, starting thunderbolt\n");
+ 
++	if (nhi_has_active_boot_device(nhi))
++		host_reset = false;
++
+ 	nhi->host_reset = host_reset;
+ 
+ 	res = tb_domain_add(tb, host_reset);
+diff --git a/drivers/thunderbolt/tb.c b/drivers/thunderbolt/tb.c
+index a15c4d07ef78..20b66b447819 100644
+--- a/drivers/thunderbolt/tb.c
++++ b/drivers/thunderbolt/tb.c
+@@ -3013,6 +3013,24 @@ static int tb_scan_finalize_switch(struct device *dev, void *data)
+ 	return 0;
+ }
+ 
++/**
++ * tb_switch_has_active_pcie_tunnel() - Check if router has active PCIe adapters
++ * @sw: Switch to check
++ *
++ * Returns true if any PCIe downstream adapter on the switch is currently
++ * enabled by the boot firmware.
++ */
++static bool tb_switch_has_active_pcie_tunnel(struct tb_switch *sw)
++{
++	struct tb_port *port;
++
++	tb_switch_for_each_port(sw, port) {
++		if (tb_port_is_pcie_down(port) && tb_pci_port_is_enabled(port))
++			return true;
++	}
++	return false;
++}
++
+ static int tb_start(struct tb *tb, bool reset)
+ {
+ 	struct tb_cm *tcm = tb_priv(tb);
+@@ -3059,10 +3077,12 @@ static int tb_start(struct tb *tb, bool reset)
+ 	tb_switch_tmu_enable(tb->root_switch);
+ 
+ 	/*
+-	 * Boot firmware might have created tunnels of its own. Since we
+-	 * cannot be sure they are usable for us, tear them down and
++	 * Boot firmware might have created tunnels of its own. If no PCIe
++	 * boot tunnels are detected, tear them down and
+ 	 * reset the ports to handle it as new hotplug for USB4 v1
+ 	 * routers (for USB4 v2 and beyond we already do host reset).
++	 * If active PCIe boot tunnels exist, preserve them so external
++	 * boot devices (NVMe root) are not disconnected.
+ 	 */
++	if (tb_switch_has_active_pcie_tunnel(tb->root_switch)) {
++		tb_info(tb, "active PCIe boot tunnel detected, preserving topology\n");
++		reset = false;
+ 	}
+ 
+ 	if (reset && tb_switch_is_usb4(tb->root_switch)) {
+ 		discover = false;
+ 		if (usb4_switch_version(tb->root_switch) == 1)
+ 			tb_switch_reset(tb->root_switch);
+ 	}
+ 
+ 	if (discover) {
+ 		/* Full scan to discover devices added before the driver was loaded. */
+ 		tb_scan_switch(tb->root_switch);
+ 		/* Find out tunnels created by the boot firmware */
+ 		tb_discover_tunnels(tb);
+ 		/* Add DP resources from the DP tunnels created by the boot firmware */
+ 		tb_discover_dp_resources(tb);
+ 	}
+-- 
+2.43.0
