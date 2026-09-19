@@ -112,7 +112,9 @@ Upstream maintainers intended this reset to clear inconsistent boot-firmware Dis
 | `setup_usb4_boot.sh --verify` | Runtime check of PCIe link speed (16.0 GT/s), width (x4), and HMB status. |
 | `setup_usb4_boot.sh --health` | Audits SMART attributes, drive temperature, TBW endurance, and HMB state. |
 | `packaging/build_deb.sh` | Builds standalone `.deb` package (`dist/usb4-nvme-direct-boot_1.0.0_all.deb`). |
+| `scripts/apply_kernel_patch.sh` | Helper tool to validate/apply upstream LKML C patch to Linux trees. |
 | `tests/run_all_tests.sh` | Master automated test suite (CLI flags, kernel patch validation, .deb build). |
+
 
 ---
 
