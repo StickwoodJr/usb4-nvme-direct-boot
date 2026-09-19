@@ -2,6 +2,7 @@
 ## Direct UEFI Booting over PCIe Gen 4 x4 with Host Memory Buffer Support
 
 [![Status](https://img.shields.io/badge/Status-Verified-brightgreen)](#)
+[![Launchpad Bug](https://img.shields.io/badge/Launchpad-LP%232167764-orange)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
 [![Protocol](https://img.shields.io/badge/Protocol-USB4%20%2F%20TB4%2040Gbps-blue)](#)
 [![Read Speed](https://img.shields.io/badge/Read%20Speed-3%2C588%20MB%2Fs-informational)](#)
 [![Write Speed](https://img.shields.io/badge/Write%20Speed-2%2C024%20MB%2Fs-informational)](#)
@@ -42,6 +43,11 @@ When booting from an external NVMe drive connected to a USB4 port:
 1. **Preserve Pre-Boot Tunnel:** Pass `thunderbolt.host_reset=0` on the kernel command line.
 2. **Prevent Link Power State Drops:** Pass `thunderbolt.clx=0` and `pcie_port_pm=off`.
 3. **Early Bus Rescan:** Ensure Thunderbolt devices are authorized and trigger `/sys/bus/pci/rescan` prior to udev settlement in early boot.
+
+### Bug Tracking & Upstream References:
+* **Ubuntu Launchpad Bug Report:** [LP#2167764 — thunderbolt.host_reset=1 default tears down pre-boot UEFI PCIe tunnels](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
+* **Affected Kernel Module:** `thunderbolt` (`drivers/thunderbolt/nhi.c`)
+* **Upstream Regression Commit:** [`59a54c5f3dbd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59a54c5f3dbd)
 
 ---
 
