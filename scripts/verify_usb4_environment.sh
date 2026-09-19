@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # verify_usb4_environment.sh - USB4 Direct-Boot & Storage Pipeline Pre-Flight Check
-# Purpose: Fast, sub-100ms hardware, transport link, and kernel parameter verification
-# Design:  Pure function, zero bloat, zero background overhead
+# Purpose: Hardware, transport link, and kernel parameter verification
+# Scope:   Inspects runtime sysfs, PCIe link, and kernel cmdline parameters
 # ==============================================================================
 set -euo pipefail
 

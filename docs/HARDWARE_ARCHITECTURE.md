@@ -56,7 +56,7 @@ When the host boots:
    ```
 
 ### The Solution:
-Setting `thunderbolt.host_reset=0` ensures that the kernel probe leaves pre-existing UEFI tunnels completely intact across the kernel handover. Combined with `thunderbolt.clx=0` (which prevents low-power CL0s/CL1 lane transitions from dropping links) and early PCIe bus rescan hooks, direct booting becomes 100% stable.
+Setting `thunderbolt.host_reset=0` ensures that the kernel probe leaves pre-existing UEFI tunnels completely intact across the kernel handover. Combined with `thunderbolt.clx=0` (which prevents low-power CL0s/CL1 lane transitions from dropping links) and early PCIe bus rescan hooks, direct booting functions reliably.
 
 ---
 

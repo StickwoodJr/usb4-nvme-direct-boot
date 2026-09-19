@@ -3,8 +3,7 @@
 # nvme_health_audit.sh - Storage Forensic Health & Endurance Audit Utility
 # Target:  WD_BLACK SN7100 1TB NVMe SSD / High-Performance PCIe NVMe
 # Enclosure: ASMedia ASM2464PD / Thunderbolt 4 USB4 Enclosures
-# Design:  Pure function, zero daemons, zero background overhead (<150ms execution)
-# Supports: Dual-mode inspection (USB4 PCIe Tunnel /dev/nvme* & USB 3.2 UASP /dev/sd*)
+# Supports:  Dual-mode inspection (USB4 PCIe Tunnel /dev/nvme* & USB 3.2 UASP /dev/sd*)
 # ==============================================================================
 set -euo pipefail
 
@@ -267,7 +266,7 @@ echo -e " ├─ Remaining Endurance    : ${GREEN}${BOLD}${REMAINING_TBW} TB${NC
 
 echo -e "\n${BOLD}[3] DATA INTEGRITY & HARDWARE RELIABILITY${NC}"
 if [[ "$MEDIA_ERRORS" -eq 0 ]]; then
-    echo -e " ├─ Media/Data Errors      : ${GREEN}${BOLD}0 (Flawless Data Integrity)${NC}"
+    echo -e " ├─ Media/Data Errors      : ${GREEN}${BOLD}0 (None Detected)${NC}"
 else
     echo -e " ├─ Media/Data Errors      : ${RED}${BOLD}${MEDIA_ERRORS} (HARDWARE WARNING)${NC}"
 fi

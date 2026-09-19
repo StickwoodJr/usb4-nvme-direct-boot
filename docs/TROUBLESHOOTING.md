@@ -59,7 +59,7 @@ If your system fails to boot or hangs at the initial ramdisk stage after a syste
 ## 3. Multi-PC Portability
 
 ### Can I use this drive on other computers (e.g. school labs, work PCs)?
-**Yes, 100% seamlessly.**
+**Yes.**
 
 1. **Hardware Fallback is Automatic:**
    When connected to computers lacking USB4 (such as PCs with standard 10 Gbps or 20 Gbps USB-C ports), the ASM2464PD bridge automatically falls back to standard UASP (`/dev/sda`).

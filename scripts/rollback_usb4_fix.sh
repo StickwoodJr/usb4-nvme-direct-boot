@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# rollback_usb4_fix.sh - 1-Click Rollback Script for USB4 Direct-Boot Configuration
-# Purpose: Cleanly removes all drop-in files and restores the pre-change initrd
+# rollback_usb4_fix.sh - Rollback Utility for USB4 Direct-Boot Configuration
+# Purpose: Removes deployed drop-in files and restores the pre-change initrd
 # ==============================================================================
 
 set -euo pipefail

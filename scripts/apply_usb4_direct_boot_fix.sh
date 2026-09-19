@@ -4,7 +4,7 @@
 # Target Systems:  Laptops & Desktops with Intel/AMD USB4 / Thunderbolt 4
 # Target Enclosure: ASMedia ASM2464PD / Intel Thunderbolt USB4 NVMe Enclosures
 # Supports:        Dracut & Initramfs-tools frameworks with Dynamic UUID Discovery
-# Philosophy:      Pure function, zero bloat, 100% safety for internal Windows/Linux drives
+# Scope:           Configures boot drop-ins on target root without modifying internal disks
 # ==============================================================================
 
 set -euo pipefail
