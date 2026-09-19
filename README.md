@@ -30,19 +30,27 @@ Empirical test results on bare-metal hardware (WD_BLACK SN7100 in an ASMedia ASM
 ## Technical Context: Upstream Kernel Probe Behavior
 
 ### Root Cause of Boot Hangs
-In upstream Linux 6.8+ (commit `59a54c5f3dbd`), the `thunderbolt` kernel module sets `host_reset = true` by default.
+In upstream Linux 6.8+ (commit `59a54c5f3dbd`), the `thunderbolt` kernel module sets `host_reset = true` by default (`MODULE_PARM_DESC(host_reset, "reset USB4 host router (default: true)")`).
 
-When booting from an external NVMe drive connected to a USB4 port:
+Upstream developers introduced this reset to:
+* Clear inconsistent or buggy register states left by motherboard UEFI implementations.
+* Emulate Windows (`usb4host.sys`) initialization behavior for driver parity.
+* Prevent DMA ring deadlocks and race conditions during hotplug events with high-bandwidth docks.
+
+**The Architectural Conflict:**
+This design relies on the assumption that all USB4 devices are secondary, hotpluggable peripherals mounted after the operating system has already booted from internal storage.
+
+When booting Linux directly from an external NVMe drive over USB4:
 1. Motherboard UEFI BIOS negotiates the physical link and creates a pre-boot PCIe tunnel.
-2. GRUB loads the kernel and initial ramdisk into memory.
-3. During driver initialization, `thunderbolt.ko` executes `nhi_reset()`.
-4. The reset tears down the pre-boot tunnel, disconnecting the NVMe drive mid-boot (`-ENODEV`).
+2. GRUB loads the kernel and initial ramdisk into memory across this tunnel.
+3. During driver probe, `thunderbolt.ko` executes `nhi_reset()`.
+4. The reset tears down the pre-boot tunnel, disconnecting the boot drive mid-boot (`-ENODEV`).
 5. The initial ramdisk waits for the root partition before timing out into an emergency shell.
 
 ### Mitigation:
-1. **Preserve Pre-Boot Tunnel:** Pass `thunderbolt.host_reset=0` on the kernel command line.
-2. **Prevent Link Power State Drops:** Pass `thunderbolt.clx=0` and `pcie_port_pm=off`.
-3. **Early Bus Rescan:** Ensure Thunderbolt devices are authorized and trigger `/sys/bus/pci/rescan` prior to udev settlement in early boot.
+1. **Preserve Pre-Boot Tunnel:** Pass `thunderbolt.host_reset=0` on the kernel command line to prevent `nhi_reset()` from executing on probe.
+2. **Prevent Link Power State Drops:** Pass `thunderbolt.clx=0` and `pcie_port_pm=off` to avoid low-power link retraining disconnects.
+3. **Early Bus Rescan:** Deploy an early initial ramdisk hook to ensure Thunderbolt devices are authorized and trigger `/sys/bus/pci/rescan` prior to udev settlement.
 
 ### Bug Tracking & Upstream References:
 * **Ubuntu Launchpad Bug Report:** [LP#2167764 — thunderbolt.host_reset=1 default tears down pre-boot UEFI PCIe tunnels](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)

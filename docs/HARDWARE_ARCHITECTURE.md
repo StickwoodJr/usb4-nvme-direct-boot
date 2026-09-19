@@ -34,29 +34,47 @@ Modern high-performance external SSD enclosures utilizing the **ASMedia ASM2464P
 
 ---
 
-## 2. Upstream Kernel Regression Analysis
+## 2. Upstream Kernel Driver Behavior & Architecture
 
-### The Root Cause: `thunderbolt.host_reset=1`
-In upstream Linux kernel versions starting from 6.8+ (specifically commit `59a54c5f3dbd`), the `thunderbolt` kernel driver changed the default behavior of `host_reset` from `0` (disabled) to `1` (enabled).
+### Upstream Context: Why `host_reset=true` Was Introduced
+In Linux kernel 6.8+ (notably commit `59a54c5f3dbd`), the `thunderbolt` driver module (`drivers/thunderbolt/nhi.c`) set the module parameter `host_reset` to `true` by default:
+```c
+static bool host_reset = true;
+module_param(host_reset, bool, 0444);
+MODULE_PARM_DESC(host_reset, "reset USB4 host router (default: true)");
+```
 
-When the host boots:
-1. The UEFI BIOS successfully initializes the USB4 link and constructs a pre-boot PCIe tunnel.
-2. GRUB is loaded from the external NVMe drive into host DDR RAM.
-3. The kernel begins executing and probes the `thunderbolt` driver.
-4. With `host_reset=1`, `nhi_reset()` executes during early driver initialization.
-5. **Impact:** The pre-boot PCIe tunnel is severed. The NVMe controller disappears from the PCI bus (`-ENODEV`).
-6. The initramfs bootloader waits indefinitely for the root partition UUID before dropping to an emergency shell with:
+Upstream kernel maintainers introduced this reset behavior to address specific issues with peripheral devices:
+1. **Clearing Inconsistent Firmware State:** Motherboard UEFI implementations frequently leave the Thunderbolt Host Router in partially initialized or proprietary register states after POST. Resetting the host router ensures the driver starts from a standardized baseline.
+2. **Parity with Windows:** The Windows USB4 driver stack (`usb4host.sys`) performs a hardware reset on the host router during initialization. Emulating this behavior aimed to eliminate platform-specific quirks on consumer laptops.
+3. **Deadlock Prevention on Hotplug:** On systems with high-bandwidth docks, unhandled DMA rings and interrupt state from pre-boot could lead to race conditions and driver deadlocks (`xHCI host controller not responding`) during hot-unplug events.
+
+### The Architectural Conflict: Peripheral vs. Boot Storage
+The fundamental limitation of defaulting `host_reset=true` is the underlying assumption that **all USB4 devices are secondary peripherals** (such as docks, displays, eGPUs, or data disks) attached to a system already running from internal storage.
+
+When booting Linux directly from an external NVMe drive over USB4:
+1. The UEFI BIOS negotiates the physical 40 Gbps link and creates a pre-boot PCIe Gen 4 x4 tunnel.
+2. GRUB loads the kernel and initial ramdisk into memory across this active tunnel.
+3. The kernel executes and loads `thunderbolt.ko`.
+4. Because `host_reset=true`, `nhi_reset()` executes on probe and resets the host router.
+5. **The active pre-boot tunnel is destroyed mid-boot**, immediately disconnecting the storage controller (`-ENODEV`).
+6. The initial ramdisk searches for the root partition UUID, fails to find the device, and drops to an emergency shell:
    ```text
    Gave up waiting for root file system device.
-   Common problems:
-    - Boot args (cat /proc/cmdline)
-    - Check rootdelay= (did the system wait long enough?)
-    - Missing modules (cat /proc/modules; ls /dev)
    ALERT! UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx does not exist.
    ```
 
-### The Solution:
-Setting `thunderbolt.host_reset=0` ensures that the kernel probe leaves pre-existing UEFI tunnels completely intact across the kernel handover. Combined with `thunderbolt.clx=0` (which prevents low-power CL0s/CL1 lane transitions from dropping links) and early PCIe bus rescan hooks, direct booting functions reliably.
+### Prior Art Comparison: eGPU ReBAR vs. Direct-Boot Storage
+The `thunderbolt.host_reset=false` parameter previously saw limited adoption in the external GPU (eGPU) community, where users discovered that the host reset cleared Resizable BAR (ReBAR) allocations established by the BIOS, capping GPUs at 256MB apertures. 
+
+However, in the context of storage, common documentation and forum guidance frequently misattributed USB4 boot failures to firmware limitations (e.g., claiming BIOS lack of USB4 direct-boot support) or advocated complex two-stage bootloader workarounds. Applying `thunderbolt.host_reset=0` alongside early PCIe rescan hooks preserves the firmware-established tunnel across the kernel handover, allowing the external drive to remain continuously visible from POST through OS initialization.
+
+### Full Pipeline Mitigation
+Preserving the pre-boot tunnel requires addressing both the controller reset and bus power management:
+1. `thunderbolt.host_reset=0`: Prevents `nhi_reset()` from tearing down the pre-boot PCIe tunnel during driver probe.
+2. `thunderbolt.clx=0`: Prevents low-power CL0s/CL1 lane transitions from initiating link retraining.
+3. `pcie_port_pm=off`: Prevents PCIe root ports from entering runtime D3cold during early initialization.
+4. **Early Bus Rescan:** Deploys an initial ramdisk hook executing prior to udev settlement to ensure tunneled devices are enumerated before root mount discovery completes.
 
 ---
 
