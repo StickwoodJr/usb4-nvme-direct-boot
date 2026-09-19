@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        if [ -x /usr/share/usb4-nvme-direct-boot/scripts/rollback_usb4_fix.sh ]; then
+            echo "usb4-nvme-direct-boot: Checking for active configurations to cleanly rollback..."
+            /usr/share/usb4-nvme-direct-boot/scripts/rollback_usb4_fix.sh --force || true
+        fi
+        ;;
+    upgrade|failed-upgrade)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

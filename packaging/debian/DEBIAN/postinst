@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        echo "usb4-nvme-direct-boot: Package files installed."
+        echo "To run a non-destructive audit:       sudo usb4-boot-config --audit"
+        echo "To preview planned system changes:    sudo usb4-boot-config --dry-run"
+        echo "To apply direct-boot configurations:  sudo usb4-boot-config --apply"
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

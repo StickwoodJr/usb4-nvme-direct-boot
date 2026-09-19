@@ -18,10 +18,20 @@ if [[ ! -f "${DEB_FILE}" ]]; then
     exit 1
 fi
 
-# Verify control fields
+# Verify control fields and maintainer scripts
 control_info=$(dpkg-deb -I "${DEB_FILE}")
 if ! echo "${control_info}" | grep -q "Package: usb4-nvme-direct-boot"; then
     echo "FAIL: Package name mismatch in debian control"
+    exit 1
+fi
+
+if ! echo "${control_info}" | grep -q "postinst"; then
+    echo "FAIL: Missing postinst script in package control archive"
+    exit 1
+fi
+
+if ! echo "${control_info}" | grep -q "prerm"; then
+    echo "FAIL: Missing prerm script in package control archive"
     exit 1
 fi
 

@@ -24,8 +24,16 @@ mkdir -p "${BUILD_DIR}/usr/share/usb4-nvme-direct-boot/scripts"
 mkdir -p "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}"
 mkdir -p "${OUTPUT_DIR}"
 
-# Copy control file
+# Copy control and maintainer scripts
 cp "${PKG_ROOT}/DEBIAN/control" "${BUILD_DIR}/DEBIAN/control"
+if [[ -f "${PKG_ROOT}/DEBIAN/postinst" ]]; then
+    cp "${PKG_ROOT}/DEBIAN/postinst" "${BUILD_DIR}/DEBIAN/postinst"
+    chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
+fi
+if [[ -f "${PKG_ROOT}/DEBIAN/prerm" ]]; then
+    cp "${PKG_ROOT}/DEBIAN/prerm" "${BUILD_DIR}/DEBIAN/prerm"
+    chmod 755 "${BUILD_DIR}/DEBIAN/prerm"
+fi
 
 # Copy CLI binary to /usr/sbin
 cp "${SCRIPT_DIR}/setup_usb4_boot.sh" "${BUILD_DIR}/usr/sbin/usb4-boot-config"
