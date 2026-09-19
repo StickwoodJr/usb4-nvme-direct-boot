@@ -1,0 +1,9 @@
+# Backups and temporary files
+*.bak
+*.tmp
+*.log
+*~
+.DS_Store
+
+# User backup directory
+usb4-prechange-backup/
