@@ -1,11 +1,12 @@
-# USB4 / Thunderbolt 4 NVMe Direct-Boot Suite for Linux
-## Workaround & Kernel Forensics for Direct UEFI Booting over PCIe Gen 4 x4
+# USB4 / Thunderbolt 4 NVMe Direct-Boot Workaround Suite for Linux
+## Targeted Workaround & Kernel Forensics for Direct UEFI Booting over PCIe Gen 4 x4
 
 [![CI Tests](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions/workflows/ci.yml/badge.svg)](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions)
 [![Launchpad Bug](https://img.shields.io/badge/Launchpad-LP%232167764-orange)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
 [![Protocol](https://img.shields.io/badge/Protocol-USB4%20%2F%20TB4%2040Gbps-blue)](#)
 [![Status](https://img.shields.io/badge/Status-Lab%20Verified%20%2F%20Workaround-blue)](#)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
 
 > [!WARNING]
 > **Experimental Workstation Tooling & System Scope:**
@@ -89,13 +90,26 @@ Upstream maintainers intended this reset to clear inconsistent boot-firmware Dis
 4. **Discovery Suppression (`tb_start`):** In `tb_start()`, `reset == true` sets `discover = false`, skipping `tb_discover_tunnels()` entirely.
 5. **Storage Deadlock (`nvme_probe`):** Concurrently, `nvme_probe()` attempts to access the device. Reads return Master Abort (`0xFFFFFFFF`), power transition `D3cold` to `D0` fails, and `nvme_probe()` aborts with terminal error `-ENODEV`. Linux driver core never re-probes endpoints that return `-ENODEV`, panicking the initial ramdisk (`ALERT! UUID=... does not exist`).
 
-### Local Workaround vs. Upstream Patch
-- **This Repository (Workaround):** Passes `thunderbolt.host_reset=0` to suppress `nhi_reset()`, combined with early initramfs rescan hooks.
-- **Proposed Upstream C Patch:** A formal 64-line patch modifying `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` to check for active boot storage before issuing hardware resets. Available at [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch).
-- **Comprehensive Whitepaper:** Full register forensics and architectural analysis available in [`docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md`](docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md).
-- **Official Bug Tracker:** [Ubuntu Launchpad Bug LP#2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764).
+### Upstream Status & Bug Tracker
+- **Ubuntu Launchpad:** Tracking under [Ubuntu Launchpad Bug LP#2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764).
+- **Upstream LKML Proposal:** Formal patch modifying `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` to preserve pre-boot PCIe tunnels for external boot storage is staged in [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch).
+- **Scope Clarification:** **This repository is a local workaround suite pending official upstream kernel changes.** It is not an officially accepted upstream kernel patch, nor a general Thunderbolt performance framework.
 
 ---
+
+## ⚠️ Known Side Effects & System Scope
+
+Disabling PCIe link power management and USB4 low-power lane states is an effective workaround to prevent link retraining drops, but it alters system-wide bus behavior. Review these documented side effects before deploying:
+
+| Subsystem / Scenario | Observed / Potential Side Effect | Technical Impact & Measurement | Mitigation / Recommendation |
+| :--- | :--- | :--- | :--- |
+| **Battery Life / Idle Power** | `pcie_port_pm=off` prevents PCIe root ports from entering runtime `D3cold`. | Laptop idle power consumption increases by **~1.2W to 2.8W** while running on battery. | Use AC power for high-performance direct-boot workloads; revert via `--rollback` if running on battery long-term. |
+| **Multi-Display Docks** | `thunderbolt.host_reset=0` preserves firmware tunnels instead of clearing them. | Complex daisy-chained docks (e.g. CalDigit TS4, Dell WD19TB/WD22TB4) may fail to negotiate full DisplayPort bandwidth (falling back to HBR2 instead of HBR3/DSC) if boot firmware allocated suboptimal tunnels. | Connect displays directly to laptop HDMI/DP or power-cycle the dock after boot. |
+| **System Suspend / Resume** | `thunderbolt.clx=0` keeps high-speed lanes out of CL0s/CL1 low-power states. | On certain platforms, modern standby (`s2idle`) may experience higher drain or occasional PCIe hotplug wake latency. | Test system suspend (`systemctl suspend`) after initial deployment. |
+| **Host Authorization (SL1/SL2)** | Machines with Thunderbolt Security Levels enabled in BIOS. | If user authorization is enforced by firmware, pre-boot tunnels are rejected unless the enclosure is enrolled in the host pre-boot ACL. | Boot via a standard USB 3.2 port (bypassing PCIe tunneling) on restricted corporate/institutional PCs. |
+
+---
+
 
 ## 🛠️ CLI Reference & Utility Scripts
 

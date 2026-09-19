@@ -61,11 +61,12 @@ while [[ $# -gt 0 ]]; do
             MODE="non-interactive"
             shift
             ;;
-        --force)
+        --force|--force-unsupported)
             FORCE=1
             shift
             ;;
         --uuid)
+
             if [[ -n "${2:-}" ]]; then
                 UUID_OVERRIDE="$2"
                 shift 2
@@ -375,6 +376,46 @@ elif [[ "${INIT_FRAMEWORK}" == "unknown" ]]; then
     exit 1
 fi
 
+# Decisive Environment Matrix Validation
+VALIDATED_ENVIRONMENT=1
+VALIDATION_REASONS=()
+
+# 1. Check Kernel Version >= 6.8
+k_major=$(echo "$KVER_MM" | cut -d. -f1)
+k_minor=$(echo "$KVER_MM" | cut -d. -f2)
+if [[ "$k_major" -lt 6 ]] || [[ "$k_major" -eq 6 && "$k_minor" -lt 8 ]]; then
+    VALIDATED_ENVIRONMENT=0
+    VALIDATION_REASONS+=("Kernel version ${RUNNING_KERNEL} is < 6.8 (upstream host_reset=1 regression is not present).")
+fi
+
+# 2. Check Thunderbolt / USB4 Controller Presence
+if [[ "$HAS_TB_CONTROLLER" -ne 1 ]]; then
+    VALIDATED_ENVIRONMENT=0
+    VALIDATION_REASONS+=("No USB4 or Thunderbolt host controller detected on the system.")
+fi
+
+# 3. Check External Storage Root (or UUID override provided)
+if [[ "$ROOT_IS_EXTERNAL" -ne 1 && -z "$UUID_OVERRIDE" ]]; then
+    VALIDATED_ENVIRONMENT=0
+    VALIDATION_REASONS+=("Active root filesystem does not appear to reside on an external USB4/USB device. Applying to internal drive will introduce unnecessary global kernel parameter modifications.")
+fi
+
+if [[ "$VALIDATED_ENVIRONMENT" -eq 0 ]]; then
+    log_warn "Target system is outside the strictly validated hardware & topology matrix:"
+    for r in "${VALIDATION_REASONS[@]}"; do
+        echo -e "    ${YELLOW}* ${r}${NC}"
+    done
+    echo ""
+    if [[ "$FORCE" -ne 1 ]]; then
+        log_fail "Execution blocked by safety gating. To override and apply anyway, rerun with --force-unsupported."
+        echo "Example: sudo ./setup_usb4_boot.sh --apply --force-unsupported"
+        exit 2
+    else
+        log_warn "Proceeding due to --force-unsupported flag. This state will be recorded in the transaction manifest."
+    fi
+fi
+
+
 # Interactive confirmation & safety warnings
 if [[ "${MODE}" == "interactive" ]]; then
     echo -e "${BOLD}====================================================================${NC}"
@@ -438,7 +479,10 @@ TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 KERNEL="${RUNNING_KERNEL}"
 FRAMEWORK="${INIT_FRAMEWORK}"
 ROOT_UUID="${TARGET_ROOT_UUID}"
+VALIDATED_MATRIX="${VALIDATED_ENVIRONMENT}"
+FORCED_UNSUPPORTED="${FORCE}"
 EOF
+
 
 if [[ -f "${INITRD_TARGET}" ]]; then
     log_info "Backing up ${INITRD_TARGET}..."

@@ -47,9 +47,11 @@ ${BOLD}PRIMARY COMMANDS:${NC}
   --health            Query SMART attributes, temperature, and Host Memory Buffer.
 
 ${BOLD}OPTIONS:${NC}
-  --uuid <UUID>       Explicitly set root partition UUID (useful for chroot installs).
-  --non-interactive   Skip interactive confirmation prompts in --apply mode.
-  -h, --help          Display this help documentation.
+  --uuid <UUID>          Explicitly set root partition UUID (useful for chroot installs).
+  --non-interactive      Skip interactive confirmation prompts in --apply mode.
+  --force-unsupported    Force --apply execution on unvalidated kernels, controllers, or internal roots.
+  -h, --help             Display this help documentation.
+
 
 ${BOLD}EXAMPLES:${NC}
   # 1. Check system readiness without changing anything:
