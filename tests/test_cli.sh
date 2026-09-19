@@ -75,6 +75,10 @@ test_assert "Reject --apply without root" \
 test_assert "Honor --uuid override in dry-run" \
     "${CLI} --dry-run --uuid 11111111-2222-3333-4444-555555555555" 0 "11111111-2222-3333-4444-555555555555"
 
+# Test 9: Verify mode runs cleanly
+test_assert "Run Verify Mode" \
+    "${CLI} --verify" 0 "PRE-FLIGHT VERIFICATION"
+
 echo "======================================================================"
 echo " Results: ${PASS_COUNT} of ${TEST_COUNT} tests passed."
 echo "======================================================================"
