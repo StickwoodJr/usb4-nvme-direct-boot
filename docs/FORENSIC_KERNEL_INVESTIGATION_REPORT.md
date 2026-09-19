@@ -16,7 +16,7 @@
 | **Primary Authors / Engineering** | Antigravity (Google DeepMind Advanced Agentic Coding) & Systems Engineering Lead (`[USER]`) |
 | **Upstream Subsystem** | Linux USB4 / Thunderbolt (`drivers/thunderbolt/`) & PCI Express Hotplug (`drivers/pci/hotplug/pciehp*`) |
 | **Canonical Bug Tracker** | [Ubuntu Launchpad Bug LP#2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764) |
-| **Operational Status** | 🟢 **100% Resolved, Benchmarked, and Verified Operational on Physical Silicon** |
+| **Operational Status** | 🟢 **Local Workaround Verified on Tested Platform; Upstream Patch Proposed** |
 
 ---
 
