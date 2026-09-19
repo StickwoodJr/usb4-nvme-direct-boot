@@ -74,7 +74,23 @@ else
     echo "PASSED (Format verified)"
 fi
 
+# 5. Helper Script Test (scripts/apply_kernel_patch.sh)
+echo -n "Checking patch helper utility (scripts/apply_kernel_patch.sh)... "
+if [[ -x "${SCRIPT_DIR}/scripts/apply_kernel_patch.sh" ]]; then
+    "${SCRIPT_DIR}/scripts/apply_kernel_patch.sh" -h >/dev/null
+    if ! "${SCRIPT_DIR}/scripts/apply_kernel_patch.sh" /nonexistent 2>/dev/null; then
+        echo "PASSED"
+    else
+        echo "FAILED (Did not reject invalid directory)" >&2
+        exit 1
+    fi
+else
+    echo "FAILED (Script missing or not executable)" >&2
+    exit 1
+fi
+
 echo "======================================================================"
 echo " Patch validation completed successfully."
 echo "======================================================================"
+
 exit 0
