@@ -53,6 +53,8 @@ When booting Linux directly from an external NVMe drive over USB4:
 3. **Early Bus Rescan:** Deploy an early initial ramdisk hook to ensure Thunderbolt devices are authorized and trigger `/sys/bus/pci/rescan` prior to udev settlement.
 
 ### Bug Tracking & Upstream References:
+* **Forensic Investigation Whitepaper:** [`docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md`](docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md)
+* **Hardware Architecture Dossier:** [`docs/HARDWARE_ARCHITECTURE.md`](docs/HARDWARE_ARCHITECTURE.md)
 * **Ubuntu Launchpad Bug Report:** [LP#2167764 — thunderbolt.host_reset=1 default tears down pre-boot UEFI PCIe tunnels](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
 * **Affected Kernel Module:** `thunderbolt` (`drivers/thunderbolt/nhi.c`)
 * **Upstream Regression Commit:** [`59a54c5f3dbd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59a54c5f3dbd)
