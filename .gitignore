@@ -7,3 +7,8 @@
 
 # User backup directory
 usb4-prechange-backup/
+
+# Packaging build artifacts
+packaging/build/
+dist/
+

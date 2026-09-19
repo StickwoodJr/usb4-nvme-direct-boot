@@ -13,6 +13,8 @@ echo "========================================================================"
 bash "${SCRIPT_DIR}/test_cli.sh"
 echo ""
 bash "${SCRIPT_DIR}/test_patch_validation.sh"
+echo ""
+bash "${SCRIPT_DIR}/test_deb_packaging.sh"
 
 echo ""
 echo "========================================================================"

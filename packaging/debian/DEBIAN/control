@@ -1,0 +1,12 @@
+Package: usb4-nvme-direct-boot
+Version: 1.0.0
+Section: admin
+Priority: optional
+Architecture: all
+Depends: bash (>= 5.0), coreutils, util-linux, pciutils
+Recommends: dracut | initramfs-tools, grub2-common
+Maintainer: StickwoodJr <dev@stickwoodjr.local>
+Description: USB4/Thunderbolt 4 NVMe Direct-Boot Hardening Suite
+ Workaround suite and tooling to prevent pre-boot PCIe tunnel teardown
+ and dropped external NVMe root filesystems on Linux kernels >= 6.8.
+ Implements runtime gating, early rescan hooks, and transactional safety.
