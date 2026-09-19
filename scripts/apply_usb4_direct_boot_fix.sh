@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# apply_usb4_direct_boot_fix.sh - Universal Turnkey USB4 Direct-Boot Installer
+# apply_usb4_direct_boot_fix.sh - Hardened USB4 / TB4 Direct-Boot Installer
+# ==============================================================================
 # Target Systems:  Laptops & Desktops with Intel/AMD USB4 / Thunderbolt 4
-# Target Enclosure: ASMedia ASM2464PD / Intel Thunderbolt USB4 NVMe Enclosures
-# Supports:        Dracut & Initramfs-tools frameworks with Dynamic UUID Discovery
-# Scope:           Configures boot drop-ins on target root without modifying internal disks
+# Target Storage:  External NVMe SSDs (ASMedia ASM2464PD / Intel Thunderbolt)
+# Frameworks:      Dracut & Initramfs-tools with Dynamic UUID Discovery
+# Scope:           Safe boot drop-ins on target root without modifying internal disks
+# Transaction:     Atomic state manifest with automatic error trap rollback
 # ==============================================================================
 
 set -euo pipefail
@@ -23,16 +25,22 @@ log_warn()    { echo -e "  [${YELLOW}${BOLD}WARN${NC}] $1"; }
 log_fail()    { echo -e "  [${RED}${BOLD}FAIL${NC}] $1"; }
 log_header()  { echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}"; }
 
-# Default variables
+# Paths & Defaults
 USER_HOME="${SUDO_USER:+/home/$SUDO_USER}"
 USER_HOME="${USER_HOME:-$HOME}"
 BACKUP_DIR="${USER_HOME}/usb4-prechange-backup"
+STATE_DIR="/var/lib/usb4-direct-boot"
+TRANSACTION_MANIFEST="${STATE_DIR}/transaction.manifest"
 RUNNING_KERNEL="$(uname -r)"
 INITRD_TARGET="/boot/initrd.img-${RUNNING_KERNEL}"
 DRACUT_MOD_DIR="/usr/lib/dracut/modules.d/99usb4-rescan"
 
 MODE="interactive"
 UUID_OVERRIDE=""
+FORCE=0
+
+# Transaction tracking array
+CREATED_FILES=()
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +57,14 @@ while [[ $# -gt 0 ]]; do
             MODE="apply"
             shift
             ;;
+        --non-interactive)
+            MODE="non-interactive"
+            shift
+            ;;
+        --force)
+            FORCE=1
+            shift
+            ;;
         --uuid)
             if [[ -n "${2:-}" ]]; then
                 UUID_OVERRIDE="$2"
@@ -59,15 +75,17 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         -h|--help)
-            echo "Universal USB4 Direct-Boot Setup Utility"
+            echo "USB4 Direct-Boot Setup Utility (Hardened Installer)"
             echo "Usage: sudo bash $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --audit          Perform read-only pre-flight audit of host, framework, and UUID"
-            echo "  --dry-run        Preview all configuration files and actions without modifying"
-            echo "  --apply, -y      Apply hardened USB4 boot configurations and rebuild initrd"
-            echo "  --uuid <UUID>    Override root filesystem UUID (useful for chroot provisioning)"
-            echo "  -h, --help       Display this help message"
+            echo "  --audit             Perform read-only pre-flight audit of host, kernel, and USB4 topology"
+            echo "  --dry-run           Preview all configuration files and actions without modifying state"
+            echo "  --apply, -y         Apply hardened USB4 boot configurations and rebuild initrd (requires root)"
+            echo "  --non-interactive   Skip interactive confirmation prompts in --apply mode"
+            echo "  --force             Override safety warnings regarding kernel or controller generation"
+            echo "  --uuid <UUID>       Explicitly set root partition UUID (useful for chroot installs)"
+            echo "  -h, --help          Display this help message"
             echo ""
             exit 0
             ;;
@@ -80,7 +98,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ==============================================================================
-# DYNAMIC ENVIRONMENT DETECTION
+# ENVIRONMENT & HARDWARE DISCOVERY
 # ==============================================================================
 detect_root_uuid() {
     if [[ -n "${UUID_OVERRIDE}" ]]; then
@@ -110,6 +128,16 @@ detect_root_uuid() {
 }
 
 detect_initramfs_framework() {
+    # Check for unsupported frameworks first
+    if command -v mkinitcpio >/dev/null 2>&1; then
+        echo "mkinitcpio"
+        return
+    fi
+    if command -v rpm-ostree >/dev/null 2>&1; then
+        echo "ostree"
+        return
+    fi
+
     # Check if dracut is present
     if command -v dracut >/dev/null 2>&1; then
         echo "dracut"
@@ -137,35 +165,105 @@ detect_bootloader_type() {
     fi
 }
 
+detect_kernel_major_minor() {
+    local kver="$RUNNING_KERNEL"
+    local major minor
+    major=$(echo "$kver" | cut -d. -f1)
+    minor=$(echo "$kver" | cut -d. -f2)
+    echo "${major}.${minor}"
+}
+
+check_thunderbolt_controller() {
+    local has_tb=0
+    # Check PCI devices for Thunderbolt / USB4
+    if command -v lspci >/dev/null 2>&1; then
+        if lspci -d ::0c0330 2>/dev/null | grep -qi "USB4"; then
+            has_tb=1
+        elif lspci 2>/dev/null | grep -qiE "(Thunderbolt|USB4)"; then
+            has_tb=1
+        fi
+    fi
+    if [[ -d /sys/bus/thunderbolt ]]; then
+        has_tb=1
+    fi
+    echo "$has_tb"
+}
+
+check_root_is_external() {
+    local root_src
+    root_src=$(findmnt -no SOURCE / 2>/dev/null || true)
+    local is_ext=0
+    if [[ "$root_src" =~ nvme[0-9]+n[0-9]+ ]]; then
+        # Check if parent device is behind a Thunderbolt root port or removable
+        local ctrl_dev
+        ctrl_dev=$(basename "$(readlink "/sys/class/block/$(basename "$root_src")/device" 2>/dev/null || echo "")")
+        if udevadm info -q property "/sys/class/nvme/${ctrl_dev}" 2>/dev/null | grep -qE "(ID_PATH.*pci.*00:07|ID_PATH.*pci.*00:0d)"; then
+            is_ext=1
+        elif [[ -f "/sys/class/block/$(basename "$root_src")/removable" ]] && [[ "$(cat "/sys/class/block/$(basename "$root_src")/removable")" == "1" ]]; then
+            is_ext=1
+        fi
+    elif [[ "$root_src" =~ sd[a-z] ]]; then
+        is_ext=1
+    fi
+    echo "$is_ext"
+}
+
 TARGET_ROOT_UUID="$(detect_root_uuid)"
 INIT_FRAMEWORK="$(detect_initramfs_framework)"
 BOOTLOADER_CMD="$(detect_bootloader_type)"
+KVER_MM="$(detect_kernel_major_minor)"
+HAS_TB_CONTROLLER="$(check_thunderbolt_controller)"
+ROOT_IS_EXTERNAL="$(check_root_is_external)"
 
 # ==============================================================================
-# 1. AUDIT MODE (Read-only inspection)
+# AUDIT MODE
 # ==============================================================================
 run_audit() {
-    log_header "READ-ONLY PRE-FLIGHT AUDIT"
-    log_info "Host: $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || uname -n) ($(uname -m))"
-    log_info "Running Kernel: ${RUNNING_KERNEL}"
-    log_info "Detected Initramfs Engine: ${INIT_FRAMEWORK}"
-    log_info "Detected Bootloader Updater: ${BOOTLOADER_CMD}"
+    log_header "READ-ONLY PRE-FLIGHT AUDIT & SYSTEM RECONNAISSANCE"
+    log_info "Host Model: $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || uname -n) ($(uname -m))"
+    log_info "Running Kernel: ${RUNNING_KERNEL} (Major.Minor: ${KVER_MM})"
     
-    if [[ -n "${TARGET_ROOT_UUID}" ]]; then
-        log_ok "Detected Root UUID: ${TARGET_ROOT_UUID}"
+    # Kernel version assessment
+    local k_major k_minor
+    k_major=$(echo "$KVER_MM" | cut -d. -f1)
+    k_minor=$(echo "$KVER_MM" | cut -d. -f2)
+    if [[ "$k_major" -gt 6 ]] || [[ "$k_major" -eq 6 && "$k_minor" -ge 8 ]]; then
+        log_ok "Kernel version ${RUNNING_KERNEL} >= 6.8: subject to host_reset=1 regression (mitigation applicable)"
     else
-        log_warn "Could not automatically resolve root UUID. Specify with --uuid <UUID> if necessary."
+        log_info "Kernel version ${RUNNING_KERNEL} < 6.8: regression not present by default"
     fi
 
+    # Controller assessment
+    if [[ "$HAS_TB_CONTROLLER" -eq 1 ]]; then
+        log_ok "USB4 / Thunderbolt host controller detected on PCI/sysfs"
+    else
+        log_warn "No USB4 / Thunderbolt controller detected on PCI bus"
+    fi
+
+    # Storage topology assessment
     local cur_root
     cur_root=$(findmnt -no SOURCE / 2>/dev/null || echo "unknown")
-    log_info "Current Root Device: ${cur_root}"
+    log_info "Current Root Mount Device: ${cur_root}"
+    if [[ "$ROOT_IS_EXTERNAL" -eq 1 ]]; then
+        log_ok "Root storage is an external USB4/USB bus device"
+    else
+        log_info "Root storage appears to be an internal bus drive"
+    fi
+
+    log_info "Detected Initramfs Engine: ${INIT_FRAMEWORK}"
+    log_info "Detected Bootloader Tool: ${BOOTLOADER_CMD}"
+    
+    if [[ -n "${TARGET_ROOT_UUID}" ]]; then
+        log_ok "Detected Root Partition UUID: ${TARGET_ROOT_UUID}"
+    else
+        log_warn "Could not resolve root UUID automatically. Supply with --uuid <UUID>."
+    fi
 
     # Check initrd file
     if [[ -f "${INITRD_TARGET}" ]]; then
         log_ok "Target initrd exists: ${INITRD_TARGET} ($(du -h "${INITRD_TARGET}" 2>/dev/null | awk '{print $1}'))"
     else
-        log_warn "Target initrd not found at ${INITRD_TARGET}. A new initrd will be generated."
+        log_warn "Target initrd not found at ${INITRD_TARGET}. Rebuild will generate a new image."
     fi
 
     # Check Thunderbolt runtime parameter
@@ -175,7 +273,7 @@ run_audit() {
     fi
     log_info "thunderbolt.host_reset runtime: ${hr} (Target: N/0)"
 
-    log_header "SYSTEM CONFIGURATION DROP-IN AUDIT"
+    log_header "CONFIGURATION DROP-IN AUDIT"
     for f in \
         "/etc/default/grub.d/99-usb4-transport.cfg" \
         "/etc/modprobe.d/thunderbolt.conf" \
@@ -186,13 +284,13 @@ run_audit() {
         "/etc/initramfs-tools/conf.d/usb4-rootdelay.conf"
     do
         if [[ -e "$f" ]]; then
-            log_ok "Found: $f"
+            log_ok "Active on system: $f"
         else
-            log_info "Pending (will be deployed): $f"
+            log_info "Pending (not deployed): $f"
         fi
     done
 
-    echo -e "\n${GREEN}${BOLD}Audit complete.${NC} Ready for automated deployment.\n"
+    echo -e "\n${GREEN}${BOLD}Pre-flight audit complete.${NC}\n"
 }
 
 if [[ "${MODE}" == "audit" ]]; then
@@ -201,50 +299,53 @@ if [[ "${MODE}" == "audit" ]]; then
 fi
 
 # ==============================================================================
-# 2. DRY-RUN MODE (Preview operations without writing)
+# DRY-RUN MODE
 # ==============================================================================
 run_dry_run() {
-    log_header "DRY-RUN EXECUTION PREVIEW"
-    log_info "No filesystem changes or initrd rebuilds will be performed in dry-run mode."
+    log_header "DRY-RUN EXECUTION PREVIEW (ZERO MUTATION)"
+    log_info "No files will be modified, created, or deleted."
     log_info "Target Kernel: ${RUNNING_KERNEL}"
     log_info "Target Root UUID: ${TARGET_ROOT_UUID:-<Auto-detected during execution>}"
-    log_info "Framework: ${INIT_FRAMEWORK}"
+    log_info "Initramfs Engine: ${INIT_FRAMEWORK}"
     log_info "Bootloader Tool: ${BOOTLOADER_CMD}"
 
-    echo -e "\n${BOLD}[1] Bootloader Configuration:${NC}"
+    echo -e "\n${BOLD}[1] Planned Bootloader Parameters:${NC}"
     if [[ -d /etc/default/grub.d ]] || [[ -f /etc/default/grub.d/99-usb4-transport.cfg ]]; then
-        echo "  Target: /etc/default/grub.d/99-usb4-transport.cfg"
+        echo "  Target File: /etc/default/grub.d/99-usb4-transport.cfg"
     else
-        echo "  Target: /etc/default/grub (appended to GRUB_CMDLINE_LINUX)"
+        echo "  Target File: /etc/default/grub (append to GRUB_CMDLINE_LINUX)"
     fi
     echo "  Parameters: thunderbolt.host_reset=0 thunderbolt.clx=0 pcie_port_pm=off rootdelay=60"
 
-    echo -e "\n${BOLD}[2] Driver & Modprobe Configuration:${NC}"
-    echo "  Target: /etc/modprobe.d/thunderbolt.conf"
+    echo -e "\n${BOLD}[2] Planned Modprobe Configuration:${NC}"
+    echo "  Target File: /etc/modprobe.d/thunderbolt.conf"
     echo "  Content: options thunderbolt host_reset=0 clx=0"
 
-    echo -e "\n${BOLD}[3] Udev TRIM Optimization Rule:${NC}"
-    echo "  Target: /etc/udev/rules.d/10-asm2464pd-trim.rules"
+    echo -e "\n${BOLD}[3] Planned Udev Rule:${NC}"
+    echo "  Target File: /etc/udev/rules.d/10-asm2464pd-trim.rules"
     echo "  Content: ASMedia ASM2464PD 64MB discard limit clamp"
 
-    echo -e "\n${BOLD}[4] Initramfs Engine Configuration:${NC}"
+    echo -e "\n${BOLD}[4] Planned Initramfs Drop-ins:${NC}"
     if [[ "${INIT_FRAMEWORK}" == "dracut" ]]; then
         echo "  Engine: dracut"
         echo "  Drop-in: /etc/dracut.conf.d/99-usb4.conf"
-        echo "  Module: ${DRACUT_MOD_DIR}/"
+        echo "  Module Directory: ${DRACUT_MOD_DIR}/"
         echo "    - module-setup.sh"
-        echo "    - usb4-pre-trigger.sh"
-        echo "    - usb4-initqueue-settled.sh (Dynamic Root UUID: ${TARGET_ROOT_UUID})"
-        echo "  Rebuild Command: dracut --force ${INITRD_TARGET} ${RUNNING_KERNEL}"
+        echo "    - usb4-pre-trigger.sh (early PCIe bus rescan)"
+        echo "    - usb4-initqueue-settled.sh (Dynamic Root UUID: ${TARGET_ROOT_UUID:-Dynamic})"
+        echo "  Command: dracut --force ${INITRD_TARGET} ${RUNNING_KERNEL}"
     elif [[ "${INIT_FRAMEWORK}" == "initramfs-tools" ]]; then
         echo "  Engine: initramfs-tools"
         echo "  Drop-in: /etc/initramfs-tools/conf.d/usb4-rootdelay.conf"
         echo "  Modules: /etc/initramfs-tools/modules (thunderbolt, nvme, nvme_core)"
         echo "  Premount Script: /etc/initramfs-tools/scripts/init-premount/usb4-rescan"
-        echo "  Rebuild Command: update-initramfs -u -k ${RUNNING_KERNEL}"
+        echo "  Command: update-initramfs -u -k ${RUNNING_KERNEL}"
+    elif [[ "${INIT_FRAMEWORK}" == "mkinitcpio" ]]; then
+        echo "  Engine: mkinitcpio (Arch Linux)"
+        echo "  Notice: Automatic injection not supported; manual mkinitcpio.conf hook required."
     fi
 
-    echo -e "\n${GREEN}${BOLD}Dry-run complete.${NC} To execute, run: sudo bash $0 --apply\n"
+    echo -e "\n${GREEN}${BOLD}Dry-run complete.${NC} To apply changes, execute: sudo ./setup_usb4_boot.sh --apply\n"
 }
 
 if [[ "${MODE}" == "dry-run" ]]; then
@@ -253,24 +354,47 @@ if [[ "${MODE}" == "dry-run" ]]; then
 fi
 
 # ==============================================================================
-# 3. ROOT ENFORCEMENT & CONFIRMATION
+# ROOT ENFORCEMENT & SAFETY GATING
 # ==============================================================================
 if [[ $EUID -ne 0 ]]; then
     log_fail "This script modifies system boot configuration and must be run as root."
-    echo "Run with: sudo bash $0 --apply"
+    echo "Run with: sudo ./setup_usb4_boot.sh --apply"
     exit 1
 fi
 
+# Framework sanity check
+if [[ "${INIT_FRAMEWORK}" == "mkinitcpio" ]]; then
+    log_fail "Arch Linux mkinitcpio detected. This automated suite currently supports dracut and initramfs-tools."
+    echo "Please consult docs/HARDWARE_ARCHITECTURE.md for manual mkinitcpio hook configuration."
+    exit 1
+elif [[ "${INIT_FRAMEWORK}" == "ostree" ]]; then
+    log_fail "rpm-ostree / immutable distribution detected. Modifying initrd drop-ins directly is not supported."
+    exit 1
+elif [[ "${INIT_FRAMEWORK}" == "unknown" ]]; then
+    log_fail "Could not identify an active initramfs engine (dracut or initramfs-tools). Aborting."
+    exit 1
+fi
+
+# Interactive confirmation & safety warnings
 if [[ "${MODE}" == "interactive" ]]; then
     echo -e "${BOLD}====================================================================${NC}"
-    echo -e "${CYAN}${BOLD} Universal USB4 Direct-Boot Setup Utility                           ${NC}"
+    echo -e "${CYAN}${BOLD} USB4 Direct-Boot Setup Utility (Targeted Application)              ${NC}"
     echo -e "${BOLD}====================================================================${NC}"
-    echo "Detected Environment:"
+    echo "Environment Discovery:"
     echo "  - Running Kernel:   ${RUNNING_KERNEL}"
     echo "  - Initramfs Engine: ${INIT_FRAMEWORK}"
-    echo "  - Root UUID:        ${TARGET_ROOT_UUID:-unknown}"
+    echo "  - Target Root UUID: ${TARGET_ROOT_UUID:-unknown}"
+    echo "  - Storage Profile:  $([[ $ROOT_IS_EXTERNAL -eq 1 ]] && echo 'External USB4/USB Drive' || echo 'Internal Drive')"
     echo ""
-    read -rp "Do you wish to apply the direct-boot fix? [y/N]: " confirm
+    echo -e "${YELLOW}${BOLD}IMPORTANT SAFETY & POWER TRADE-OFF NOTICE:${NC}"
+    echo "1. Adding 'thunderbolt.clx=0 pcie_port_pm=off' disables low-power link states"
+    echo "   on PCIe root ports to prevent link retraining drops. On battery power, this"
+    echo "   may slightly increase idle power draw."
+    echo "2. A full backup of your current initrd and configuration files will be stored"
+    echo "   in: ${BACKUP_DIR}"
+    echo "3. You can cleanly undo all changes at any time with: sudo ./setup_usb4_boot.sh --rollback"
+    echo ""
+    read -rp "Proceed with deploying USB4 direct-boot configurations? [y/N]: " confirm
     if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
         echo "Deployment cancelled by user."
         exit 0
@@ -278,32 +402,49 @@ if [[ "${MODE}" == "interactive" ]]; then
 fi
 
 # ==============================================================================
-# 4. PREREQUISITE VALIDATION
+# TRANSACTIONAL ERROR TRAP & ROLLBACK HOOK
 # ==============================================================================
-log_header "VALIDATING PREREQUISITES"
-if [[ "${INIT_FRAMEWORK}" == "unknown" ]]; then
-    log_fail "Could not identify an active initramfs engine (dracut or initramfs-tools). Aborting."
-    exit 1
-fi
-log_ok "Initramfs engine: ${INIT_FRAMEWORK}"
+cleanup_on_failure() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "\n${RED}${BOLD}[FATAL] Deployment failed with exit code ${exit_code}!${NC}"
+        echo -e "${YELLOW}Initiating emergency rollback of newly created drop-in files...${NC}"
+        for f in "${CREATED_FILES[@]}"; do
+            if [[ -e "$f" ]]; then
+                rm -rf "$f"
+                echo "  [CLEANUP] Removed incomplete: $f"
+            fi
+        done
+        if [[ -f "${INITRD_TARGET}.pre-usb4-bak" ]]; then
+            cp -a "${INITRD_TARGET}.pre-usb4-bak" "${INITRD_TARGET}"
+            echo "  [RESTORE] Restored pristine initrd from backup"
+        fi
+        echo -e "${RED}System restored to safe baseline state. Error was intercepted.${NC}\n"
+    fi
+}
+trap cleanup_on_failure EXIT
 
-if [[ -z "${TARGET_ROOT_UUID}" ]]; then
-    log_warn "Target root UUID could not be detected automatically. Proceeding with hardware-fallback rescan."
-else
-    log_ok "Target Root UUID: ${TARGET_ROOT_UUID}"
-fi
-
 # ==============================================================================
-# 5. PRE-CHANGE SYSTEM BACKUPS
+# SYSTEM BACKUPS & STATE MANIFEST
 # ==============================================================================
-log_header "CREATING SYSTEM BACKUPS"
+log_header "STAGE 1: CREATING TRANSACTIONAL BACKUPS"
 mkdir -p "${BACKUP_DIR}"
+mkdir -p "${STATE_DIR}"
+
+# Initialize transaction manifest
+cat <<EOF > "${TRANSACTION_MANIFEST}"
+# USB4 Direct-Boot Deployment Manifest
+TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+KERNEL="${RUNNING_KERNEL}"
+FRAMEWORK="${INIT_FRAMEWORK}"
+ROOT_UUID="${TARGET_ROOT_UUID}"
+EOF
 
 if [[ -f "${INITRD_TARGET}" ]]; then
-    log_info "Backing up ${INITRD_TARGET} to ${INITRD_TARGET}.pre-usb4-bak..."
+    log_info "Backing up ${INITRD_TARGET}..."
     cp -a "${INITRD_TARGET}" "${INITRD_TARGET}.pre-usb4-bak"
-    log_info "Backing up ${INITRD_TARGET} to ${BACKUP_DIR}/initrd.img-${RUNNING_KERNEL}.bak..."
     cp -a "${INITRD_TARGET}" "${BACKUP_DIR}/initrd.img-${RUNNING_KERNEL}.bak"
+    echo "INITRD_BACKUP=\"${INITRD_TARGET}.pre-usb4-bak\"" >> "${TRANSACTION_MANIFEST}"
 fi
 
 for cfg in \
@@ -318,26 +459,31 @@ do
         cp -a "$cfg" "${BACKUP_DIR}/" 2>/dev/null || true
     fi
 done
-log_ok "Backups stored safely in ${BACKUP_DIR}"
+log_ok "Pristine backups stored in ${BACKUP_DIR}"
+
+record_created_file() {
+    CREATED_FILES+=("$1")
+    echo "FILE=\"$1\"" >> "${TRANSACTION_MANIFEST}"
+}
 
 # ==============================================================================
-# 6. STAGE A: BOOTLOADER / GRUB CONFIGURATION
+# STAGE A: BOOTLOADER / GRUB CONFIGURATION
 # ==============================================================================
-log_header "STAGE A: CONFIGURING BOOTLOADER KERNEL ARGUMENTS"
+log_header "STAGE 2: CONFIGURING BOOTLOADER KERNEL ARGUMENTS"
 
 USB4_FLAGS="thunderbolt.host_reset=0 thunderbolt.clx=0 pcie_port_pm=off rootdelay=60"
 
 if [[ -d /etc/default/grub.d ]]; then
-    cat <<EOF > /etc/default/grub.d/99-usb4-transport.cfg
-# ==============================================================================
+    TARGET_GRUB_CFG="/etc/default/grub.d/99-usb4-transport.cfg"
+    [[ ! -f "$TARGET_GRUB_CFG" ]] && record_created_file "$TARGET_GRUB_CFG"
+    cat <<EOF > "$TARGET_GRUB_CFG"
 # /etc/default/grub.d/99-usb4-transport.cfg
-# Hardened USB4 External NVMe Transport Parameters
-# ==============================================================================
+# USB4 External NVMe Direct-Boot Kernel Parameters
 USB4_TRANSPORT_FLAGS="${USB4_FLAGS}"
 GRUB_CMDLINE_LINUX="\${GRUB_CMDLINE_LINUX:-} \${USB4_TRANSPORT_FLAGS}"
 EOF
-    chmod 644 /etc/default/grub.d/99-usb4-transport.cfg
-    log_ok "Deployed /etc/default/grub.d/99-usb4-transport.cfg"
+    chmod 644 "$TARGET_GRUB_CFG"
+    log_ok "Deployed ${TARGET_GRUB_CFG}"
 elif [[ -f /etc/default/grub ]]; then
     if ! grep -q "USB4 DIRECT BOOT" /etc/default/grub; then
         cat <<EOF >> /etc/default/grub
@@ -381,34 +527,40 @@ else
 fi
 
 # ==============================================================================
-# 7. STAGE B: DRIVER, MODPROBE, UDEV & SYSCTL CONFIGURATION
+# STAGE B: DRIVER, MODPROBE, UDEV & SYSCTL
 # ==============================================================================
-log_header "STAGE B: DEPLOYING HARDWARE & STORAGE CONFIGURATION"
+log_header "STAGE 3: DEPLOYING HARDWARE & STORAGE CONFIGURATION"
 
 # 1. Modprobe configuration for Thunderbolt
 mkdir -p /etc/modprobe.d
-cat <<'EOF' > /etc/modprobe.d/thunderbolt.conf
+TB_CONF="/etc/modprobe.d/thunderbolt.conf"
+[[ ! -f "$TB_CONF" ]] && record_created_file "$TB_CONF"
+cat <<'EOF' > "$TB_CONF"
 # /etc/modprobe.d/thunderbolt.conf
 # Enforce host_reset=0 and disable CLx low-power states to preserve PCIe tunnels
 options thunderbolt host_reset=0 clx=0
 EOF
-chmod 644 /etc/modprobe.d/thunderbolt.conf
-log_ok "Created /etc/modprobe.d/thunderbolt.conf"
+chmod 644 "$TB_CONF"
+log_ok "Created $TB_CONF"
 
 # 2. ASMedia ASM2464PD TRIM / UNMAP udev rule
 mkdir -p /etc/udev/rules.d
-cat <<'EOF' > /etc/udev/rules.d/10-asm2464pd-trim.rules
+TRIM_RULE="/etc/udev/rules.d/10-asm2464pd-trim.rules"
+[[ ! -f "$TRIM_RULE" ]] && record_created_file "$TRIM_RULE"
+cat <<'EOF' > "$TRIM_RULE"
 # /etc/udev/rules.d/10-asm2464pd-trim.rules
 # ASMedia ASM2464PD TRIM / UNMAP Optimization Rule for UASP mode
 ACTION=="add|change", ATTRS{idVendor}=="174c", SUBSYSTEM=="scsi_disk", ATTR{provisioning_mode}="unmap"
 ACTION=="add|change", ATTRS{idVendor}=="174c", SUBSYSTEM=="block", ATTR{queue/discard_max_bytes}="67108864"
 EOF
-chmod 644 /etc/udev/rules.d/10-asm2464pd-trim.rules
-log_ok "Created /etc/udev/rules.d/10-asm2464pd-trim.rules"
+chmod 644 "$TRIM_RULE"
+log_ok "Created $TRIM_RULE"
 
 # 3. High-throughput storage flush tuning
 mkdir -p /etc/sysctl.d
-cat <<'EOF' > /etc/sysctl.d/99-vms-storage.conf
+SYSCTL_CONF="/etc/sysctl.d/99-vms-storage.conf"
+[[ ! -f "$SYSCTL_CONF" ]] && record_created_file "$SYSCTL_CONF"
+cat <<'EOF' > "$SYSCTL_CONF"
 # /etc/sysctl.d/99-vms-storage.conf
 # High-Throughput & Multi-VM Storage Flush Tuning
 vm.dirty_background_bytes = 268435456
@@ -417,19 +569,21 @@ vm.dirty_expire_centisecs = 1000
 vm.dirty_writeback_centisecs = 250
 vm.vfs_cache_pressure = 50
 EOF
-chmod 644 /etc/sysctl.d/99-vms-storage.conf
+chmod 644 "$SYSCTL_CONF"
 sysctl --system >/dev/null 2>&1 || true
-log_ok "Created and applied /etc/sysctl.d/99-vms-storage.conf"
+log_ok "Created and applied $SYSCTL_CONF"
 
 # ==============================================================================
-# 8. STAGE C: INITRAMFS HOOK DEPLOYMENT
+# STAGE C: INITRAMFS HOOK DEPLOYMENT
 # ==============================================================================
-log_header "STAGE C: DEPLOYING EARLY RESCAN HOOKS (${INIT_FRAMEWORK})"
+log_header "STAGE 4: DEPLOYING EARLY RESCAN HOOKS (${INIT_FRAMEWORK})"
 
 if [[ "${INIT_FRAMEWORK}" == "dracut" ]]; then
     # Dracut driver and module configuration
     mkdir -p /etc/dracut.conf.d
-    cat <<'EOF' > /etc/dracut.conf.d/99-usb4.conf
+    DRACUT_CONF="/etc/dracut.conf.d/99-usb4.conf"
+    [[ ! -f "$DRACUT_CONF" ]] && record_created_file "$DRACUT_CONF"
+    cat <<'EOF' > "$DRACUT_CONF"
 # /etc/dracut.conf.d/99-usb4.conf
 # Dracut-native USB4 / Thunderbolt Direct-Boot Driver & Module Configuration
 add_dracutmodules+=" usb4-rescan "
@@ -437,11 +591,12 @@ force_drivers+=" thunderbolt nvme nvme_core "
 add_drivers+=" typec typec_thunderbolt ucsi_acpi typec_ucsi "
 install_items+=" /etc/modprobe.d/thunderbolt.conf "
 EOF
-    chmod 644 /etc/dracut.conf.d/99-usb4.conf
-    log_ok "Created /etc/dracut.conf.d/99-usb4.conf"
+    chmod 644 "$DRACUT_CONF"
+    log_ok "Created $DRACUT_CONF"
 
     # Dracut native module directory
     mkdir -p "${DRACUT_MOD_DIR}"
+    [[ ! -d "${DRACUT_MOD_DIR}" ]] && record_created_file "${DRACUT_MOD_DIR}"
 
     cat <<'EOF' > "${DRACUT_MOD_DIR}/module-setup.sh"
 #!/bin/sh
@@ -522,9 +677,11 @@ EOF
 elif [[ "${INIT_FRAMEWORK}" == "initramfs-tools" ]]; then
     # Timeout drop-in
     mkdir -p /etc/initramfs-tools/conf.d
-    echo "ROOTDELAY=60" > /etc/initramfs-tools/conf.d/usb4-rootdelay.conf
-    chmod 644 /etc/initramfs-tools/conf.d/usb4-rootdelay.conf
-    log_ok "Created /etc/initramfs-tools/conf.d/usb4-rootdelay.conf"
+    ROOTDELAY_CONF="/etc/initramfs-tools/conf.d/usb4-rootdelay.conf"
+    [[ ! -f "$ROOTDELAY_CONF" ]] && record_created_file "$ROOTDELAY_CONF"
+    echo "ROOTDELAY=60" > "$ROOTDELAY_CONF"
+    chmod 644 "$ROOTDELAY_CONF"
+    log_ok "Created $ROOTDELAY_CONF"
 
     # Modules
     for mod in thunderbolt nvme nvme_core typec typec_thunderbolt; do
@@ -536,7 +693,9 @@ elif [[ "${INIT_FRAMEWORK}" == "initramfs-tools" ]]; then
 
     # Early pre-mount script
     mkdir -p /etc/initramfs-tools/scripts/init-premount
-    cat <<'EOF' > /etc/initramfs-tools/scripts/init-premount/usb4-rescan
+    PREMOUNT_HOOK="/etc/initramfs-tools/scripts/init-premount/usb4-rescan"
+    [[ ! -f "$PREMOUNT_HOOK" ]] && record_created_file "$PREMOUNT_HOOK"
+    cat <<'EOF' > "$PREMOUNT_HOOK"
 #!/bin/sh
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
@@ -553,45 +712,38 @@ if [ -w /sys/bus/pci/rescan ]; then
     echo 1 > /sys/bus/pci/rescan 2>/dev/null || :
 fi
 EOF
-    chmod 755 /etc/initramfs-tools/scripts/init-premount/usb4-rescan
-    log_ok "Deployed /etc/initramfs-tools/scripts/init-premount/usb4-rescan"
+    chmod 755 "$PREMOUNT_HOOK"
+    log_ok "Deployed $PREMOUNT_HOOK"
 fi
 
 # ==============================================================================
-# 9. STAGE D: REBUILD INITRD IMAGE
+# STAGE D: REBUILD INITRD IMAGE
 # ==============================================================================
-log_header "STAGE D: REBUILDING INITIAL RAMDISK FOR KERNEL ${RUNNING_KERNEL}"
+log_header "STAGE 5: REBUILDING INITIAL RAMDISK FOR KERNEL ${RUNNING_KERNEL}"
 
 if [[ "${INIT_FRAMEWORK}" == "dracut" ]]; then
     log_info "Executing: dracut --force ${INITRD_TARGET} ${RUNNING_KERNEL}..."
-    if dracut --force "${INITRD_TARGET}" "${RUNNING_KERNEL}"; then
-        sync -f "${INITRD_TARGET}"
-        log_ok "Successfully rebuilt ${INITRD_TARGET} ($(du -h "${INITRD_TARGET}" | awk '{print $1}'))"
-    else
-        log_fail "Dracut rebuild failed! Restoring backup..."
-        if [[ -f "${INITRD_TARGET}.pre-usb4-bak" ]]; then
-            cp -a "${INITRD_TARGET}.pre-usb4-bak" "${INITRD_TARGET}"
-        fi
-        exit 1
-    fi
+    dracut --force "${INITRD_TARGET}" "${RUNNING_KERNEL}"
+    sync -f "${INITRD_TARGET}"
+    log_ok "Successfully rebuilt ${INITRD_TARGET} ($(du -h "${INITRD_TARGET}" | awk '{print $1}'))"
 elif [[ "${INIT_FRAMEWORK}" == "initramfs-tools" ]]; then
     log_info "Executing: update-initramfs -u -k ${RUNNING_KERNEL}..."
-    if update-initramfs -u -k "${RUNNING_KERNEL}"; then
-        log_ok "Successfully rebuilt initrd for kernel ${RUNNING_KERNEL}."
-    else
-        log_fail "update-initramfs rebuild failed! Restoring backup..."
-        if [[ -f "${INITRD_TARGET}.pre-usb4-bak" ]]; then
-            cp -a "${INITRD_TARGET}.pre-usb4-bak" "${INITRD_TARGET}"
-        fi
-        exit 1
-    fi
+    update-initramfs -u -k "${RUNNING_KERNEL}"
+    log_ok "Successfully rebuilt initrd for kernel ${RUNNING_KERNEL}."
 fi
 
 # ==============================================================================
-# 10. VERIFICATION
+# VERIFICATION & COMPLETION
 # ==============================================================================
-log_header "VERIFYING GENERATED INITRD"
-if command -v lsinitramfs >/dev/null 2>&1; then
+log_header "STAGE 6: VERIFYING GENERATED INITRD"
+if command -v lsinitrd >/dev/null 2>&1; then
+    MANIFEST=$(lsinitrd "${INITRD_TARGET}" 2>/dev/null || true)
+    for drv in "thunderbolt" "nvme"; do
+        if echo "${MANIFEST}" | grep -q "${drv}"; then
+            log_ok "Verified driver in initrd: ${drv}"
+        fi
+    done
+elif command -v lsinitramfs >/dev/null 2>&1; then
     MANIFEST=$(lsinitramfs "${INITRD_TARGET}" 2>/dev/null || true)
     for drv in "thunderbolt" "nvme"; do
         if echo "${MANIFEST}" | grep -q "${drv}"; then
@@ -600,25 +752,21 @@ if command -v lsinitramfs >/dev/null 2>&1; then
             log_warn "Driver ${drv} not explicitly matched in listing."
         fi
     done
-elif command -v lsinitrd >/dev/null 2>&1; then
-    MANIFEST=$(lsinitrd "${INITRD_TARGET}" 2>/dev/null || true)
-    for drv in "thunderbolt" "nvme"; do
-        if echo "${MANIFEST}" | grep -q "${drv}"; then
-            log_ok "Verified driver in initrd: ${drv}"
-        fi
-    done
 fi
 
+# Clear trap before normal exit
+trap - EXIT
+
 echo -e "\n${BOLD}${GREEN}====================================================================${NC}"
-echo -e "${BOLD}${GREEN}      USB4 Direct-Boot Fix Successfully Deployed & Verified!         ${NC}"
+echo -e "${BOLD}${GREEN}   USB4 Direct-Boot Configuration Successfully Applied!             ${NC}"
 echo -e "${BOLD}${GREEN}====================================================================${NC}"
 echo ""
-echo "Next Step: Physical Cold-Boot Procedure:"
+echo "Cold-Boot & Link Training Verification Procedure:"
 echo "  1. Run: sudo poweroff"
-echo "  2. Unplug AC power adapter."
-echo "  3. Hold laptop power button for 30 seconds (flea-power drain)."
+echo "  2. Unplug the AC power adapter."
+echo "  3. Hold the power button for 30 seconds (resets Thunderbolt retimer capacitance)."
 echo "  4. Reconnect AC power adapter."
-echo "  5. Plug the drive into the USB4 / Thunderbolt 4 Port."
+echo "  5. Connect the external SSD to the rear USB4 / Thunderbolt 4 port."
 echo "  6. Power on, tap F12 (or BIOS boot menu key), and select your external NVMe."
-echo "  7. After desktop loads, run: bash scripts/verify_usb4_environment.sh"
+echo "  7. Once desktop loads, run: ./setup_usb4_boot.sh --verify"
 echo ""

@@ -1,0 +1,46 @@
+name: Hardware Validation Submission
+description: Submit test results for a new host, enclosure, or drive combination
+labels: ["hardware-validation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help expand the USB4 NVMe Direct-Boot Support Matrix by reporting validated hardware combinations!
+  - type: input
+    id: platform
+    attributes:
+      label: Host System & Motherboard
+      placeholder: e.g. Dell XPS 15 9530, Framework 13 AMD, Lenovo ThinkPad P1 Gen 6
+    validations:
+      required: true
+  - type: input
+    id: enclosure
+    attributes:
+      label: Bridge Chipset & Firmware
+      placeholder: e.g. ASMedia ASM2464PD, Intel JHL7440
+    validations:
+      required: true
+  - type: input
+    id: ssd
+    attributes:
+      label: NVMe SSD Model
+      placeholder: e.g. WD_BLACK SN7100, Crucial P3 Plus
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Verification Outcome
+      options:
+        - "Direct Boot Succeeded (Native PCIe Gen 4 x4)"
+        - "Direct Boot Succeeded (PCIe Gen 3 x4)"
+        - "Booted via UASP Fallback Only"
+        - "Boot Failed / Requires Additional Quirks"
+    validations:
+      required: true
+  - type: textarea
+    id: benchmarks
+    attributes:
+      label: Speeds & HMB Status
+      description: Link speed, measured read/write throughput, and HMB status from `./setup_usb4_boot.sh --verify`.
+      render: shell

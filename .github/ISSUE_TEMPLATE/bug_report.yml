@@ -1,0 +1,50 @@
+name: Bug report
+description: Create a report to help reproduce and resolve an issue
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue with USB4 NVMe direct-booting!
+        Please fill in the technical details below so we can correlate behavior across hardware platforms.
+  - type: input
+    id: host_model
+    attributes:
+      label: Host System & CPU Model
+      placeholder: e.g. Alienware 16X Aurora (Intel Core Ultra 9 275HX) or Framework 16 (AMD Ryzen 7 7840HS)
+    validations:
+      required: true
+  - type: input
+    id: enclosure_model
+    attributes:
+      label: External Enclosure & Bridge Chipset
+      placeholder: e.g. UGREEN Revodok (ASMedia ASM2464PD) or Acasis TBU405 (Intel JHL7440)
+    validations:
+      required: true
+  - type: input
+    id: ssd_model
+    attributes:
+      label: NVMe SSD Model & Capacity
+      placeholder: e.g. WD_BLACK SN7100 1TB, Samsung 990 Pro 2TB
+    validations:
+      required: true
+  - type: input
+    id: os_kernel
+    attributes:
+      label: Linux Distribution & Kernel Version
+      placeholder: e.g. Ubuntu 26.04 LTS (kernel 7.0.0-31-generic) or Fedora 40 (kernel 6.8.8)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed boot behavior, timeouts, or error messages.
+    validations:
+      required: true
+  - type: textarea
+    id: verify_output
+    attributes:
+      label: Output of `./setup_usb4_boot.sh --audit` or `--verify`
+      description: Paste terminal output here.
+      render: shell
