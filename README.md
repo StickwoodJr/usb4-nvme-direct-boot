@@ -168,6 +168,7 @@ usb4-nvme-direct-boot/
 │   └── 0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch # Production C patch for drivers/thunderbolt/
 │
 └── docs/                              # Detailed engineering documentation
+    ├── EXECUTIVE_SUMMARY.md           # 2-minute overview: what goes wrong, what we change, side effects
     ├── FORENSIC_KERNEL_INVESTIGATION_REPORT.md # In-depth forensic whitepaper & LKML submission
     ├── FRESH_INSTALL_PLAYBOOK.md      # Installation guide for new distributions
     ├── HARDWARE_ARCHITECTURE.md       # Technical notes on USB4 tunneling, retimers, and HMB
