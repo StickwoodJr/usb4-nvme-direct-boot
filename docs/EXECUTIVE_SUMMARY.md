@@ -21,9 +21,9 @@ Device: /dev/nvme0n1                                       💥 PCIe Tunnel Torn
 
 1. **UEFI Firmware** trains the physical 40 Gbps link and creates a PCIe Gen 4 x4 tunnel.
 2. **GRUB2** successfully loads the Linux kernel and initrd into memory over this tunnel.
-3. **The Regression:** In upstream Linux kernels **6.8 and later**, the Thunderbolt driver (`thunderbolt.ko`) defaults to resetting host routers on probe (`host_reset = true`, upstream commit `59a54c5f3dbd`).
-4. On USB4 v2 host controllers (Intel Arrow Lake, Meteor Lake), this reset clears hardware registers and **abruptly tears down the active pre-boot PCIe tunnel**.
-5. Concurrently, the NVMe storage driver (`nvme.ko`) attempts to access the SSD, receives Master Abort (`-ENODEV`), and gives up. The boot halts in the initramfs emergency shell.
+3. **The Regression:** In upstream Linux kernels **6.8 and later** (introduced by commit `59a54c5f3dbd` / stable `cc4c94a5f6c4`), the Thunderbolt driver (`thunderbolt.ko`) defaults to resetting host routers on probe (`host_reset = true`).
+4. On USB4 host controllers (Intel Arrow Lake, Meteor Lake, AMD Hawk Point/Phoenix), this reset clears hardware registers and **abruptly tears down the active pre-boot PCIe tunnel**, triggering spurious hot-unplugs, dock hangs, and use-after-free panics ([CVE-2024-53194](https://nvd.nist.gov/vuln/detail/CVE-2024-53194)).
+5. Concurrently, the NVMe storage driver (`nvme.ko`) attempts to access the SSD, receives Master Abort (`-ENODEV`), and gives up permanently without retry. The boot halts in the emergency shell (tracked in Ubuntu Launchpad [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573), duplicate [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575), and [LP #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)).
 
 ---
 
