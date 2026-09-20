@@ -427,6 +427,37 @@ The regression was not confined to Ubuntu; identical failures occurred across al
 
 ---
 
+### 4.8 Upstream Commit Lineage & LKML Follow-Up Analysis
+
+The introduction of unconditional host router resets spawned an ongoing sequence of kernel regressions, locks, and bug fixes tracked across LKML, `regzbot`, and kernel bugzillas:
+
+#### 1. Commit `6faa39eea953` (`8cf9926c537c`): The Resume Inconsistency (Mika Westerberg, Feb 2024)
+* **Title:** *"thunderbolt: Reset only non-USB4 host routers in resume"*
+* **Maintainer Finding:** Maintainers quickly realized that asserting `host_reset` upon system **suspend/resume** destroyed connected USB4 docking stations, external displays, and eGPUs, causing them to fail reconnection on wake.
+* **Architectural Flaw:** Upstream patched suspend/resume to skip resets on USB4 routers, yet **left cold-boot initialization (`nhi_probe`) completely unaddressed**, preserving the destructive reset during initial OS boot.
+
+#### 2. Commit `e96efb1191de`: Universal Suppression of Tunnel Discovery (Mika Westerberg, Feb 2024)
+* **Title:** *"thunderbolt: Skip discovery also in USB4 v2 host"*
+* **Impact:** Enforced `discover = false` in `tb_start()` across all USB4 v2 controllers whenever `reset == true`. This change permanently neutralized `tb_discover_tunnels()` on all modern USB4 silicon, cementing the regression for external boot drives.
+
+#### 3. Commit `f1de1fc5f632` & The Network RTNL Self-Deadlock (Mario Limonciello, AMD, Aug/Sep 2026)
+* **Title:** *"thunderbolt: Add quirk to reset host interface on DMA path teardown for AMD USB4 routers"* (`QUIRK_RESET_DMA_ON_TEARDOWN`)
+* **The Deadlock:** Merged to handle DMA teardown on AMD routers, this change introduced a severe recursive locking crash during cable unplug events:
+  1. `tb_handle_hotplug()` acquired global mutex `tb->lock`.
+  2. Device removal called `tbnet_remove()`, which invoked `tb_domain_reset_interface()`.
+  3. `tb_domain_reset_interface()` attempted to acquire `mutex_lock(&tb->lock)` again, creating an immediate **self-deadlock**.
+  4. Because Thunderbolt networking runs under the Linux routing lock (**RTNL lock**), the worker stalled holding RTNL, completely freezing network configuration, Wi-Fi switching, and IP address assignment system-wide.
+* **The Follow-Up Fix:** Mario Limonciello refactored `tb_domain_reset_interface()` into `__tb_domain_reset_interface_locked()` and added conditional checks skipping reset when `xd->is_unplugged == true`.
+
+#### 4. Regzbot Tracking & Upstream Diagnostic Protocol (Thorsten Leemhuis)
+Under Regzbot tracking title *"thunderbolt: TB3 dock problems, xHCI host controller not responding, assume dead"*, Linux kernel regression maintainer Thorsten Leemhuis tracked recurring regressions against commit `59a54c5f3dbd`. Upstream developers (including Mario Limonciello) instructed affected users across Kernel Bugzilla (Bug 221319) and forums to test with:
+```text
+thunderbolt.host_reset=false thunderbolt.dyndbg=+p
+```
+This confirms that kernel maintainers themselves utilize `host_reset=false` as the primary triage isolation flag, fully recognizing that `host_reset=true` is the causal agent behind link drops, dock controller failures, and boot aborts.
+
+---
+
 ## 5. Upstream Architectural Rationale & The Fatal Blind Spot
 
 ### 5.1 Why Maintainers Implemented `host_reset = true`
