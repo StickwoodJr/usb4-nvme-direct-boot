@@ -52,6 +52,12 @@ cp "${SCRIPT_DIR}/LICENSE" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/copyright
 if [[ -f "${SCRIPT_DIR}/docs/TROUBLESHOOTING.md" ]]; then
     cp "${SCRIPT_DIR}/docs/TROUBLESHOOTING.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 fi
+if [[ -f "${SCRIPT_DIR}/docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+fi
+if [[ -f "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+fi
 
 # Set permissions
 chmod 755 "${BUILD_DIR}/DEBIAN"
