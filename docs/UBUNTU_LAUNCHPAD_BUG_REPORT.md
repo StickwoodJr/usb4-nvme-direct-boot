@@ -87,7 +87,8 @@ echo 1 > /sys/bus/thunderbolt/devices/0-2/authorized
 # 2. BUT the NVMe storage DOES NOT appear until an explicit bus rescan is triggered:
 echo 1 > /sys/bus/pci/rescan
 ```
-Why? Because `nvme_probe()` had already failed with `-ENODEV` during the kernel's initial bus walk when `host_reset` severed the link. **The Linux PCI core never re-probes a device that returned `-ENODEV`.** Even if `boltd` or a udev rule authorized the switch in early boot, the storage controller remains permanently dead to the kernel until a secondary `rescan` is forced. Relying on an asynchronous userspace daemon (`boltd`), an active D-Bus bus, and an initramfs PCI rescan script to resolve a race condition created by the kernel driver is fragile and redundant.
+
+Why? Because `nvme_probe()` had already failed with `-ENODEV` during the kernel's initial bus walk when `host_reset` severed the link. **The Linux PCI core never re-probes a device that returned `-ENODEV`.** Even if `boltd` or a udev rule authorized the switch in early boot, the storage controller remains permanently dead to the kernel until a secondary `rescan` is forced. Moreover, the upstream `bolt` project (`freedesktop.org/bolt`) has no PCI rescan capability—it strictly manages `/sys/bus/thunderbolt` authorization and never writes to `/sys/bus/pci/rescan`. Thus, even a fully functional `boltd` daemon inside initramfs is architecturally incapable of recovering the severed NVMe controller without an external rescan script. Relying on an asynchronous userspace daemon (`boltd`), an active D-Bus bus, and an initramfs PCI rescan script to resolve a race condition created by the kernel driver is fragile and redundant.
 
 ### C. The Linux Kernel Already Possesses Native Tunnel Discovery
 The most compelling evidence is that `drivers/thunderbolt/tb.c` **already contains full architectural logic to discover and authorize pre-boot tunnels**:
