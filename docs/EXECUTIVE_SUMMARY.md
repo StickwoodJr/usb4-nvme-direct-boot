@@ -60,6 +60,7 @@ Applying these mitigations introduces specific workstation-level trade-offs:
 
 ### 4. Further Reading
 - **Detailed Forensic Whitepaper & Register Dumps:** [`docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md`](FORENSIC_KERNEL_INVESTIGATION_REPORT.md)
+- **Ubuntu Launchpad Defect Submission Draft:** [`docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md`](UBUNTU_LAUNCHPAD_BUG_REPORT.md)
 - **Common Failure Modes & Recovery Steps:** [`docs/TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
 - **Fresh OS Installation Walkthrough:** [`docs/FRESH_INSTALL_PLAYBOOK.md`](FRESH_INSTALL_PLAYBOOK.md)
 - **Upstream C Patch Proposal:** [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](../patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch)

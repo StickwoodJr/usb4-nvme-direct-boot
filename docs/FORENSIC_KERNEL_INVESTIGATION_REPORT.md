@@ -489,42 +489,56 @@ In modern Linux systems engineering, external USB4 direct boot is critical:
 * **Portable Workstations:** Engineers carrying an entire high-speed NVMe installation between office and home workstations.
 The upstream test matrix lacked automated testing for rootfs-on-USB4 configurations, allowing commit `59a54c5f3dbd` to merge without direct-boot regression testing.
 
-### 5.3 Architectural Breakdown: Why Canonical's "Bolt in Initramfs" Theory is Flawed
+### 5.3 Technical Evaluation of Userspace Daemon Authorization in Early Boot
 
-In Launchpad Bug #2078573, Canonical kernel maintainer Mario Limonciello closed `linux (Ubuntu)` as **Won't Fix** and argued that the bug belonged in userspace:
-> *"What's going on is that it resets the topology, but the policy to re-authorize it doesn't happen because bolt is missing until the rootfs is loaded. So initramfs needs a hook to include bolt."*
+During early triage of Launchpad Bug [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573), it was suggested that early-boot USB4 authorization should be delegated to userspace by bundling `boltd` into the initramfs (`initramfs-tools`). 
 
-This perspective, while seemingly intuitive, suffers from three critical architectural fallacies:
+While delegating device authorization policy to userspace daemons is a sound pattern for hotplugged desktop peripherals, detailed architectural analysis demonstrates why this approach does not resolve early-boot storage disconnection:
 
-#### 1. Heavy Userspace Daemon Dependencies in Early Boot
-`boltd` is an asynchronous desktop-oriented daemon that requires:
-* An active **D-Bus system message bus** (`dbus-daemon` or `dbus-broker`).
-* Persistent, writable storage under `/var/lib/boltd` for database key storage and domain authorization ACLs.
-* Polkit privilege arbitration.
+#### 1. Daemon Dependencies in Minimal Ramdisk Environments
+`boltd` is an asynchronous desktop daemon designed around desktop session security:
+* Requires an active **D-Bus system message bus** (`dbus-daemon` or `dbus-broker`).
+* Requires persistent, writable storage under `/var/lib/boltd` for device key databases and domain authorization ACLs.
+* Relies on Polkit privilege arbitration.
 
-Pulling D-Bus, Polkit, and `boltd` into the early initramfs ramdisk adds massive bloat, drastically increases memory consumption, and introduces critical daemon startup ordering races before the root filesystem is even mounted.
+Pulling D-Bus, Polkit, and `boltd` into early initramfs increases ramdisk footprint and introduces complex daemon startup sequencing before the root filesystem is mounted.
 
 #### 2. The Driver Core `-ENODEV` Terminal Probe Race
-Even if a lightweight udev authorization hook is embedded into the initramfs (`ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}="1"`), **authorization alone does not restore the device**:
+Even if a lightweight udev authorization rule is embedded into the initramfs (`ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}="1"`), **authorization alone does not re-enumerate the storage controller**:
 1. When `nhi_probe()` issues `REG_RESET_HRR`, the PCIe link is physically severed.
-2. Simultaneously, the PCI bus enumeration pass calls `nvme_probe()`.
+2. Simultaneously, the PCI bus enumeration pass invokes `nvme_probe()`.
 3. Configuration space reads return `0xFFFFFFFF` (Master Abort) and power state change to `D0` fails.
 4. `nvme_probe()` exits with terminal error `-ENODEV`.
 5. Under the Linux device driver model, **the driver core never re-attempts probe on an endpoint that returned `-ENODEV`**.
-6. When `boltd` or udev subsequently authorizes the Thunderbolt switch, the PCIe root port is not rescanned automatically. As proven by Lucas in Launchpad Bug #2159575, the NVMe SSD remains dead to the operating system until an explicit bus rescan (`echo 1 > /sys/bus/pci/rescan`) is manually triggered.
+6. When `boltd` or udev subsequently authorizes the Thunderbolt switch, the PCIe root port is not rescanned automatically. As proven by Lucas in Launchpad Bug [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575), the NVMe SSD remains unprobed until an explicit bus rescan (`echo 1 > /sys/bus/pci/rescan`) is executed.
 
-#### 3. Suppressing Existing In-Kernel Pre-Boot Discovery
-The ultimate flaw is that the Linux kernel already contains full native support for discovering and auto-authorizing pre-boot firmware tunnels without any userspace daemons:
-* `drivers/thunderbolt/tb.c` contains `tb_discover_tunnels()`. When a pre-existing PCIe tunnel is detected, the kernel sets `sw->boot = true`.
-* In `tb_scan_finalize_switch()`, the kernel checks:
+#### 3. Architectural Scope of `boltd` (Absence of PCI Rescan Logic)
+Upstream `bolt` (`gitlab.freedesktop.org/bolt/bolt`) is architected strictly as a Thunderbolt device authorization manager interacting with `/sys/bus/thunderbolt/`. By design:
+* `boltd` does not interact with `/sys/bus/pci/rescan`.
+* `boltd` has no awareness of storage endpoints, block devices, or filesystem mount requirements.
+* Even if fully running inside initramfs, `boltd` cannot restore a PCIe storage controller that was severed during `nhi_reset()`.
+
+#### 4. Encrypted Root Filesystems (LUKS / `systemd-cryptsetup`)
+On systems utilizing full-disk encryption (LUKS / dm-crypt), the timing failure is especially acute:
+* `systemd-cryptsetup` expects the underlying encrypted block device (e.g., `/dev/nvme0n1p3`) to be immediately accessible when the cryptographic root target is activated.
+* If the pre-boot PCIe tunnel is severed, the cryptographic unlock times out, causing the boot process to halt in the initramfs emergency prompt before user passphrases or TPM keys can be evaluated.
+
+#### 5. Restoring Native In-Kernel Pre-Boot Discovery
+The Linux kernel already possesses built-in logic to discover and auto-authorize pre-boot firmware tunnels without requiring userspace daemons:
+* `drivers/thunderbolt/tb.c` contains `tb_discover_tunnels()`. When a pre-existing PCIe tunnel is discovered, the kernel marks `sw->boot = true`.
+* In `tb_scan_finalize_switch()`, the kernel natively authorizes boot devices:
   ```c
   if (sw->boot) {
       sw->authorized = 1;
   }
   ```
-* When `host_reset = true` was added, `tb_start()` forced `discover = false`. This **inadvertently suppressed the kernel's own built-in discovery logic**.
+* When `host_reset = true` was added, `tb_start()` set `discover = false`, inadvertently bypassing the kernel's own tunnel discovery mechanism.
+* Preserving the pre-boot tunnel allows the kernel's native in-tree discovery to execute smoothly, auto-authorizing the boot storage switch without userspace daemons.
 
-**Conclusion:** The solution was never to build complex userspace authorization daemons inside initramfs. The correct architectural solution is to stop the kernel from needlessly destroying its own pre-boot storage tunnels (`thunderbolt.host_reset=0` or the proposed in-kernel bridge preservation patch).
+#### 6. Forward Compatibility: Thunderbolt 5 & USB4 v2 (Intel Barlow Ridge)
+This architectural consideration extends directly to next-generation hardware:
+* Intel's discrete Thunderbolt 5 controllers (**Barlow Ridge**, JHL9580 / JHL9380) and future USB4 v2 silicon share this same NHI probe architecture and driver entry points.
+* Maintaining pre-boot PCIe tunnels ensures consistent direct-boot support across both current USB4 (Intel Meteor Lake, Arrow Lake, AMD Phoenix/Hawk Point) and next-generation 80/120 Gbps hardware.
 
 ---
 

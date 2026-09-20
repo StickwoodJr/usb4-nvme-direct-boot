@@ -90,8 +90,11 @@ Upstream maintainers intended this reset to clear inconsistent boot-firmware Dis
 4. **Discovery Suppression (`tb_start`):** In `tb_start()`, `reset == true` sets `discover = false`, skipping `tb_discover_tunnels()` entirely.
 5. **Storage Deadlock (`nvme_probe`):** Concurrently, `nvme_probe()` attempts to access the device. Reads return Master Abort (`0xFFFFFFFF`), power transition `D3cold` to `D0` fails, and `nvme_probe()` aborts with terminal error `-ENODEV`. Linux driver core never re-probes endpoints that return `-ENODEV`, panicking the initial ramdisk (`ALERT! UUID=... does not exist`).
 
-### Upstream Status & Bug Tracker
-- **Ubuntu Launchpad:** Tracking under [Ubuntu Launchpad Bug LP#2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764).
+### Upstream Status & Bug Trackers
+- **Launchpad Umbrella Tracker:** [Ubuntu Launchpad Bug LP #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764).
+- **Related Historical Trackers:** [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573) (*Dell Latitude 5550*) and duplicate [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575) (*ASUS Zenbook 14, dracut*).
+- **Consolidated Defect Report:** Collaborative Launchpad defect submission draft in [`docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md`](docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md).
+- **Related Security Issue:** [CVE-2024-53194](https://nvd.nist.gov/vuln/detail/CVE-2024-53194) (*PCIe hotplug use-after-free triggered by host router resets*).
 - **Upstream LKML Proposal:** Formal patch modifying `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` to preserve pre-boot PCIe tunnels for external boot storage is staged in [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch).
 - **Scope Clarification:** **This repository is a local workaround suite pending official upstream kernel changes.** It is not an officially accepted upstream kernel patch, nor a general Thunderbolt performance framework.
 

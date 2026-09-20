@@ -58,6 +58,9 @@ fi
 if [[ -f "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" ]]; then
     cp "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 fi
+if [[ -f "${SCRIPT_DIR}/docs/EXECUTIVE_SUMMARY.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/EXECUTIVE_SUMMARY.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+fi
 
 # Set permissions
 chmod 755 "${BUILD_DIR}/DEBIAN"
