@@ -1,16 +1,16 @@
-# Ubuntu Launchpad Bug Report: Comprehensive Defect Analysis & Proposal
+# Ubuntu Launchpad Bug Report: Technical Analysis & Proposal
 
 **Affected Package:** `linux (Ubuntu)`  
 **Source Package:** `linux`  
 **Binary Package:** `linux-image-7.0.0-31-generic` (Ubuntu 26.04 LTS Resolute / 24.04 HWE)  
 **Upstream Subsystem:** `drivers/thunderbolt/` (Native Host Interface & Software Connection Manager)  
-**Affected Hardware:** Intel Meteor Lake / Arrow Lake USB4 Host Interface `[8086:7ec2 / 8086:7ec4]`, AMD Hawk Point / Phoenix USB4 Host Interface `[1022:1502 / 1022:1669]`, ASMedia ASM2464PD, and all external PCIe NVMe direct-boot topologies.  
+**Affected Hardware:** Intel Meteor Lake / Arrow Lake USB4 Host Interface `[8086:7ec2 / 8086:7ec4]`, AMD Hawk Point / Phoenix USB4 Host Interface `[1022:1502 / 1022:1669]`, ASMedia ASM2464PD, and external PCIe NVMe direct-boot topologies.  
 **Related Bug Trackers:** 
 - Launchpad Bug [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573) (*"I can no longer boot from my Thunderbolt disk"*, Dell Latitude 5550)
 - Launchpad Bug [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575) (*Duplicate of LP #2078573*, ASUS Zenbook 14 UM3406HA, dracut)
 - Launchpad Bug [LP #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
-- Upstream Regression: Mainline Commits `59a54c5f3dbd` & `0fc70886569c` (Stable backport `cc4c94a5f6c4`)
-- Linked CVE: **CVE-2024-53194** (*Use-after-free of slot->bus in pciehp on hot remove*)
+- Upstream Commits: Mainline `59a54c5f3dbd` & `0fc70886569c` (Stable backport `cc4c94a5f6c4`)
+- Related Issue: **CVE-2024-53194** (*Use-after-free of slot->bus in pciehp on hot remove*)
 
 ---
 
@@ -18,7 +18,7 @@
 
 When booting Linux directly from an external NVMe SSD over a USB4/Thunderbolt 4 PCIe Gen 4 x4 tunnel, motherboard UEFI firmware negotiates the link and builds the PCIe tunnel. GRUB2 executes and loads `vmlinuz` and `initrd.img` into host RAM across this tunnel.
 
-However, during early kernel initialization inside the initramfs, `thunderbolt.ko` issues an unconditional Host Router Reset (`host_reset=true`). This severs the pre-boot PCIe tunnel mid-boot, causing `nvme_probe()` to encounter Master Abort (`0xFFFFFFFF`) and return terminal error `-ENODEV`. The root filesystem device disappears permanently from the kernel bus, causing an initramfs timeout and emergency rescue shell drop:
+However, during early kernel initialization inside the initramfs, `thunderbolt.ko` issues a Host Router Reset (`host_reset=true`). This drops the pre-boot PCIe tunnel mid-boot, causing `nvme_probe()` to encounter Master Abort (`0xFFFFFFFF`) and return terminal error `-ENODEV`. The root filesystem device is no longer enumerated on the bus during the initial scan, causing an initramfs timeout and emergency rescue shell drop:
 ```text
 Gave up waiting for root file system device.
 Common problems:
@@ -27,7 +27,7 @@ Common problems:
  - Missing modules (cat /proc/modules; ls /dev)
 ALERT! UUID=... does not exist. Dropping to a shell!
 ```
-Under Ubuntu 26.04's `dracut` framework, the failure manifests identically:
+Under Ubuntu 26.04's `dracut` framework, the failure manifests similarly:
 ```text
 Warning: /dev/disk/by-uuid/<UUID> does not exist.
 Entering emergency mode. Exit the shell to continue.
@@ -35,20 +35,20 @@ Entering emergency mode. Exit the shell to continue.
 
 ---
 
-## 2. Forensic Root Cause: The Teardown Cascade
+## 2. Technical Sequence: The Teardown Behavior
 
-Tracing `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` isolates the exact failure sequence:
+Tracing `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` details the sequence during early boot:
 
 1. **`nhi_probe()` (`drivers/thunderbolt/nhi.c:1249`):**  
    Calls `nhi_reset(nhi)`. On USB4 v2 controllers (`REG_CAPS >= 0x40`), because module parameter `host_reset` defaults to `true`, it writes `REG_RESET_HRR` (`BIT 0`) to memory-mapped register `REG_RESET` (`0x39898`):
    ```c
    iowrite32(REG_RESET_HRR, nhi->iobase + REG_RESET);
    ```
-   This asserts a hardware Host Router Reset. Register `ADP_PCIE_CS_0` bit `ADP_PCIE_CS_0_PE` (Path Enable, `BIT 31`) is de-asserted, physically collapsing the PCIe tunnel. The PCIe Root Port register clears both `Presence Detect State` (`PDS`) and `Data Link Layer Link Active` (`DL_Active`).
+   This asserts a hardware Host Router Reset. Register `ADP_PCIE_CS_0` bit `ADP_PCIE_CS_0_PE` (Path Enable, `BIT 31`) is cleared, tearing down the pre-boot PCIe tunnel. The PCIe Root Port register clears both `Presence Detect State` (`PDS`) and `Data Link Layer Link Active` (`DL_Active`).
 
 2. **`tb_start()` (`drivers/thunderbolt/tb.c:3066-3070`):**  
    `nhi_probe()` invokes `tb_domain_add(tb, host_reset)`, which calls `tb_start(tb, reset = true)`.  
-   `tb_start()` enforces:
+   `tb_start()` checks:
    ```c
    if (reset && tb_switch_is_usb4(tb->root_switch)) {
        discover = false;
@@ -56,42 +56,44 @@ Tracing `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` isolates the 
            tb_switch_reset(tb->root_switch);
    }
    ```
-   Because `discover` is forced to `false`, the kernel's built-in `tb_discover_tunnels()` and `tb_scan_switch()` are completely bypassed.
+   Because `discover` is set to `false`, the kernel's built-in `tb_discover_tunnels()` and `tb_scan_switch()` are bypassed.
 
-3. **Asynchronous Driver Collision (`drivers/nvme/host/pci.c`):**  
-   Concurrently, `nvme_probe()` attempts to enumerate the storage controller at the pre-boot ACPI address. Because the tunnel has been severed:
+3. **Driver Probing Timing (`drivers/nvme/host/pci.c`):**  
+   Concurrently, `nvme_probe()` attempts to enumerate the storage controller at the pre-boot ACPI address. Because the tunnel was dropped:
    ```text
    nvme 0000:06:00.0: Unable to change power state from D3cold to D0, device inaccessible
    nvme 0000:06:00.0: error -ENODEV: probe failed
    ```
-   Under Linux driver core semantics, an endpoint that fails with `-ENODEV` is never re-probed. Even when `thunderbolt.ko` eventually re-enumerates the enclosure seconds later, it generates thunderbolt uevents, not PCI uevents. The root partition UUID is never detected by `dracut`/`systemd`.
+   Under Linux driver core semantics, an endpoint that fails with `-ENODEV` is not automatically re-probed. Even when `thunderbolt.ko` re-enumerates the enclosure shortly afterward, the root filesystem UUID is not detected by `dracut`/`systemd` without a bus rescan.
 
 ---
 
-## 3. Why Canonical's "Won't Fix / Bolt in Initramfs" Position is Architecturally Flawed
+## 3. Technical Analysis: Initramfs Userspace Authorization vs. In-Kernel Tunnel Preservation
 
-In Launchpad Bug **LP #2078573**, Canonical marked `linux (Ubuntu)` as **Won't Fix** based on the hypothesis that:
+In Launchpad Bug **LP #2078573**, an initial working hypothesis was considered where userspace tooling (such as `boltd` or udev rules inside the initramfs) might handle re-authorizing the device:
 > *"What's going on is that it resets the topology, but the policy to re-authorize it doesn't happen because bolt is missing until the rootfs is loaded. So initramfs needs a hook to include: `/lib/udev/rules/90-bolt.rules`, `bolt.service`, `boltd`."*
 
-Subsequent empirical evidence from duplicate **LP #2159575** (ASUS Zenbook 14 running Ubuntu 26.04 LTS Resolute on `dracut`) refutes this hypothesis on three fundamental technical grounds:
+However, subsequent testing from duplicate Bug **LP #2159575** (ASUS Zenbook 14 running Ubuntu 26.04 LTS Resolute on `dracut`) provides useful insights on why in-kernel tunnel preservation is more effective than userspace authorization:
 
-### A. The Dracut Test Proves Initramfs Tooling Does Not Solve It
-When Ubuntu 26.04 transitioned to `dracut`, users experienced the exact same boot drop into the emergency shell. Dracut did not prevent the failure.
+### A. Testing on Modern Dracut (Ubuntu 26.04)
+When testing on Ubuntu 26.04 with `dracut 110-11`, the same early boot timeout occurred out of the box, showing that initramfs framework updates alone do not automatically resolve the boot sequence.
 
-### B. The Driver Core `-ENODEV` Race Condition Precludes Userspace Authorization
-In the initramfs emergency shell of Bug LP #2159575, reporter Lucas discovered:
+### B. PCI Driver Core Probe Lifecycle and the Need for Bus Rescan
+In the initramfs emergency shell of Bug LP #2159575, reporter Lucas observed the following behavior:
 ```sh
 # 1. Authorizing the USB4 switch brings the link up:
 echo 1 > /sys/bus/thunderbolt/devices/0-2/authorized
 
-# 2. BUT the NVMe storage DOES NOT appear until an explicit bus rescan is triggered:
+# 2. BUT the NVMe storage does not appear until an explicit bus rescan is triggered:
 echo 1 > /sys/bus/pci/rescan
 ```
 
-Why? Because `nvme_probe()` had already failed with `-ENODEV` during the kernel's initial bus walk when `host_reset` severed the link. **The Linux PCI core never re-probes a device that returned `-ENODEV`.** Even if `boltd` or a udev rule authorized the switch in early boot, the storage controller remains permanently dead to the kernel until a secondary `rescan` is forced. Moreover, the upstream `bolt` project (`freedesktop.org/bolt`) has no PCI rescan capability—it strictly manages `/sys/bus/thunderbolt` authorization and never writes to `/sys/bus/pci/rescan`. Thus, even a fully functional `boltd` daemon inside initramfs is architecturally incapable of recovering the severed NVMe controller without an external rescan script. Relying on an asynchronous userspace daemon (`boltd`), an active D-Bus bus, and an initramfs PCI rescan script to resolve a race condition created by the kernel driver is fragile and redundant.
+This occurs because `nvme_probe()` already returned `-ENODEV` during the kernel's initial bus walk when `host_reset` severed the link. Under standard Linux device driver core semantics, a device returning `-ENODEV` is not automatically re-probed.
 
-### C. The Linux Kernel Already Possesses Native Tunnel Discovery
-The most compelling evidence is that `drivers/thunderbolt/tb.c` **already contains full architectural logic to discover and authorize pre-boot tunnels**:
+Additionally, the upstream `bolt` project (`freedesktop.org/bolt`) focuses specifically on Thunderbolt domain management and `/sys/bus/thunderbolt/` authorization; it does not issue PCI bus rescans. Therefore, managing this purely in userspace requires coordinating early udev hooks, authorization daemons, and secondary PCI rescans during initramfs, whereas preserving the pre-boot tunnel in the kernel prevents the initial `-ENODEV` disconnect entirely.
+
+### C. In-Tree Discovery Logic
+`drivers/thunderbolt/tb.c` already contains native infrastructure for discovering and adopting pre-boot tunnels:
 ```c
 /* In tb_discover_tunnels(): */
 if (tb_tunnel_is_pci(tunnel)) {
@@ -101,16 +103,16 @@ if (tb_tunnel_is_pci(tunnel)) {
 
 /* In tb_scan_finalize_switch(): */
 if (sw->boot) {
-    sw->authorized = 1; /* Automatically authorized in-kernel! */
+    sw->authorized = 1; /* Automatically authorized in-kernel */
 }
 ```
-When `host_reset = 1` was introduced, `tb_start()` added `discover = false`, which blindly short-circuited the kernel's own tunnel discovery! When booted with `thunderbolt.host_reset=0`, the kernel discovers the tunnel natively, authorizes the switch automatically, and preserves the link with zero userspace daemons.
+When booted with `thunderbolt.host_reset=0`, `tb_start()` preserves `discover = true`. The kernel identifies the firmware-established tunnel, marks `sw->boot = true`, and authorizes the switch in-kernel without requiring external daemons.
 
 ---
 
-## 4. Empirical Hardware Proof
+## 4. Hardware Verification & Silicon Telemetry
 
-Empirical validation on physical production hardware across both Intel and AMD architectures proves that preserving pre-boot tunnels functions flawlessly:
+Testing on physical hardware across both Intel and AMD architectures confirms that preserving pre-boot tunnels maintains link stability:
 
 ### Platform A: Intel Core Ultra 9 275HX (Arrow Lake-HX)
 - **Host Interface:** Meteor Lake-P Thunderbolt 4 NHI `[8086:7ec2]`
@@ -124,38 +126,36 @@ Empirical validation on physical production hardware across both Intel and AMD a
   $ cat /sys/bus/thunderbolt/devices/0-1/authorized
   1
   ```
-- **Performance:**
+- **Observed Performance:**
   - Buffered Read: **3,587.60 MB/s**
   - Direct Write: **2,024.33 MB/s**
-  - Host Memory Buffer (HMB): 64 MB host DDR5 RAM cleanly allocated via Intel VT-d IOMMU (Write Amplification Factor dropped from 6.80 to 1.88, extending NAND lifespan by 72%).
+  - Host Memory Buffer (HMB): 64 MB host DDR5 RAM cleanly allocated via Intel VT-d IOMMU (WAF dropped from 6.80 to 1.88, significantly reducing NAND write wear).
 
 ### Platform B: AMD Hawk Point USB4 (ASUS Zenbook 14 UM3406HA, LP #2159575)
 - **Host Interface:** AMD Hawk Point USB4 Host Router `[1022:1502]`
-- **Resolution:** Boot succeeded when tunnel was preserved without dropping link.
+- **Observation:** Boot succeeds cleanly when pre-boot tunnel is preserved without link teardown.
 
 ### Platform C: Intel Core Ultra (Dell Latitude 5550, LP #2078573)
 - **Host Interface:** Intel NHI
-- **Resolution:** Confirmed 100% operational with `thunderbolt.host_reset=0`.
+- **Observation:** Confirmed operational with `thunderbolt.host_reset=0`.
 
 ---
 
-## 5. Secondary Regressions & Upstream Vulnerabilities
+## 5. Related Upstream Observations & Impact
 
-The unconditional `host_reset=true` policy introduced in commit `59a54c5f3dbd` has triggered multiple severe secondary issues tracked across the community:
-1. **CVE-2024-53194 (Use-After-Free in `pciehp`):**  
-   The unexpected link drop clears `Presence Detect State` asynchronously, triggering a spurious hot-unplug race condition where `pciehp` accesses a freed `pci_bus`, causing a NULL pointer dereference kernel panic (confirmed by Jacob Martin on LP #2159575).
-2. **Thunderbolt Dock USB Controller Death:**  
-   CalDigit TS3+, Dell WD19TB, and Lenovo ThinkPad docks experience `"xHCI host controller not responding, assume dead"` upon kernel update.
-3. **eGPU Resizable BAR (ReBAR) Collapse:**  
-   External GPU setups have their BIOS-negotiated 16GB–32GB ReBAR allocations wiped and downgraded to 256MB upon re-enumeration, degrading gaming and compute performance.
+The reset behavior has also been discussed in related upstream contexts:
+1. **PCIe Hotplug Synchronization (CVE-2024-53194):**  
+   Clearing `Presence Detect State` and `DL_Active` asynchronously exposed a race condition in `pciehp` where `pci_slot` referenced a freed `pci_bus`. This was resolved upstream in mainline commit `20502f0b3f3a` by Bjorn Helgaas.
+2. **Dock Controllers & eGPU Resources:**  
+   Community discussions (Arch Linux, Fedora, eGPU.io) have noted that skipping host reset helps preserve pre-boot memory BAR allocations (such as Resizable BAR for external GPUs) and avoids controller resets on certain Thunderbolt docks.
 
 ---
 
 ## 6. Proposed Upstream Kernel Patch
 
-Rather than forcing users to discover obscure kernel parameters, or attempting to drag D-Bus and `boltd` into early initramfs, `drivers/thunderbolt/` should inspect whether an active pre-boot PCIe tunnel exists before issuing the reset.
+To allow the driver to distinguish between hotpluggable accessories (which benefit from a clean reset for DisplayPort or MMIO reallocation) and active boot storage (which must not be severed), `drivers/thunderbolt/` can inspect whether an active pre-boot PCIe tunnel is present before issuing the reset.
 
-If an active pre-boot tunnel is detected, the driver should skip `nhi_reset()`, preserve `discover = true`, and allow `tb_discover_tunnels()` to adopt the device.
+If an active pre-boot tunnel is detected, the driver preserves `discover = true` and skips the reset, allowing `tb_discover_tunnels()` to adopt the device.
 
 ### Proposed Diff against Upstream Linux Mainline:
 ```diff
@@ -188,16 +188,16 @@ If an active pre-boot tunnel is detected, the driver should skip `nhi_reset()`, 
  		if (usb4_switch_version(tb->root_switch) == 1)
 ```
 
-The complete standalone patch and DKMS module are available at:  
+The standalone patch and reference packaging are available at:  
 [https://github.com/StickwoodJr/usb4-nvme-direct-boot](https://github.com/StickwoodJr/usb4-nvme-direct-boot)
 
 ---
 
-## 7. Action Requested from Canonical Ubuntu Kernel Team
+## 7. Suggestions for the Ubuntu Kernel Team
 
-1. **Reopen `linux (Ubuntu)` Task on Launchpad Bug #2078573:**  
-   Change status from **Won't Fix** to **Triaged / In Progress**.
-2. **Re-evaluate Initramfs vs. Kernel Fix:**  
-   Recognize that userspace authorization in `initramfs-tools` or `dracut` cannot fix the asynchronous `-ENODEV` probe race without hacky `rescan` workarounds.
-3. **Carry Conditional Host Reset or Document `thunderbolt.host_reset=0`:**  
-   Include `thunderbolt.host_reset=0` by default on Ubuntu kernel builds or evaluate the boot-tunnel preservation patch for upstream submission.
+1. **Re-evaluate Launchpad Bug #2078573 under `linux (Ubuntu)`:**  
+   Consider re-opening the kernel task in light of the `-ENODEV` probe timing findings and dracut test results, which indicate that kernel-side tunnel preservation is more robust than userspace initramfs hooks.
+2. **Consider In-Kernel Tunnel Preservation:**  
+   Evaluate adopting conditional checks for active boot tunnels or documenting `thunderbolt.host_reset=0` as the recommended setting for external direct-boot environments.
+3. **Documentation:**  
+   Help provide guidance in Ubuntu release notes or documentation for users running external direct-boot NVMe configurations over USB4 / Thunderbolt.
