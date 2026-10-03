@@ -1,5 +1,5 @@
-From: Upstream Linux Kernel Architect <investigator@kernel.org>
-Date: Sat, 19 Sep 2026 06:15:00 -0400
+From: StickwoodJr <stickwood_jr@hotmail.com>
+Date: Sat, 3 Oct 2026 14:10:00 -0400
 Subject: [PATCH] thunderbolt: Preserve pre-boot PCIe tunnels for external boot storage
 
 In Linux 6.8+, commits 0fc70886569c ("thunderbolt: Reset USB4 v2 host
@@ -36,7 +36,7 @@ Fixes: 0fc70886569c ("thunderbolt: Reset USB4 v2 host router")
 Fixes: 59a54c5f3dbd ("thunderbolt: Reset topology created by the boot firmware")
 Link: https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764
 Cc: stable@vger.kernel.org # 6.8+
-Signed-off-by: Upstream Linux Kernel Architect <investigator@kernel.org>
+Signed-off-by: StickwoodJr <stickwood_jr@hotmail.com>
 ---
  drivers/thunderbolt/nhi.c | 54 ++++++++++++++++++++++++++++++++++++++-
  drivers/thunderbolt/tb.c  | 24 ++++++++++++++++++++--
