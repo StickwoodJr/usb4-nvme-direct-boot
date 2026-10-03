@@ -1,6 +1,6 @@
 # Upstream Kernel Submission Dossier & Launchpad Escalation Package
 
-**Document Reference:** `USB4-DIRECT-BOOT-UPSTREAM-SUBMISSION-2026-v2`  
+**Document Reference:** `USB4-DIRECT-BOOT-UPSTREAM-SUBMISSION-2026`  
 **Patch Target:** `drivers/thunderbolt/` (Native Host Interface & Software Connection Manager)  
 **Mainline Commits Addressed:** `59a54c5f3dbd` & `0fc70886569c` (Stable backport `cc4c94a5f6c4`)  
 **Ubuntu Bug Tracker:** [Launchpad Bug #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764) (Tracked in Stonking)  
@@ -20,7 +20,7 @@ Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>,
     linux-kernel@vger.kernel.org,
     linux-pci@vger.kernel.org,
     stable@vger.kernel.org # 6.8+
-Subject: [PATCH v2] thunderbolt: Preserve pre-boot PCIe tunnels for active storage devices
+Subject: [PATCH] thunderbolt: Preserve pre-boot PCIe tunnels for active storage devices
 
 In Linux 6.8+, commits 0fc70886569c ("thunderbolt: Reset USB4 v2 host
 router") and 59a54c5f3dbd ("thunderbolt: Reset topology created by the boot
@@ -39,13 +39,6 @@ devices: tb_discover_tunnels() traverses existing PCIe tunnels, marks
 the upstream switches as sw->boot = true, and tb_scan_finalize_switch()
 authorizes them. However, unconditional host_reset and discover = false
 short-circuits this entire mechanism.
-
-Earlier naive proposals attempted to skip resets if any device was present
-behind sibling PCIe bridges (!list_empty(&bridge->subordinate->devices)).
-However, multi-function Thunderbolt/USB4 docks (e.g. CalDigit TS4, Dell
-WD19TB/WD22TB4) expose internal PCIe switches with Ethernet, USB, or audio
-endpoints initialized by BIOS. Treating docks as "boot devices" prevents
-proper teardown and degrades native DisplayPort tunnel establishment.
 
 Fix this regression cleanly by:
 1. Adding nhi_has_active_storage() in drivers/thunderbolt/nhi.c to walk
@@ -226,13 +219,11 @@ While userspace initramfs hooks (rescan delays) can occasionally mask timing rac
 3. This triggers a fatal PCIe AER Surprise Down error (`0x00000020`), drops `DL_Active` to 0, and returns `0xFFFFFFFF` (Master Abort) to `nvme_probe()`, failing with `-ENODEV`.
 4. As a result, the root filesystem UUID is missing, dropping the user to the dracut/initramfs emergency shell.
 
-### 2. Multi-Device Collision Safety: Why Class-Based Storage Checks are Required
-A naive workaround of checking whether any PCIe bridge has children (`!list_empty(&bridge->subordinate->devices)`) creates a regression for multi-function docks (e.g. CalDigit TS4, Dell WD19TB/WD22TB4). Docks have internal PCIe Ethernet, USB, or audio endpoints initialized by BIOS; skipping reset on them degrades native DisplayPort tunneling.
-
-We have authored and validated a hardened patch that uses `pci_walk_bus()` to strictly inspect for `PCI_BASE_CLASS_STORAGE` (`0x01`):
-- External USB4 NVMe boot drives are safely preserved without dropping the link.
+### 2. Multi-Device Safety: Class-Based Storage Inspection
+Multi-function docks (e.g. CalDigit TS4, Dell WD19TB/WD22TB4) expose internal PCIe switches with Ethernet, USB, or audio endpoints initialized by BIOS. To ensure the fix does not interfere with dock initialization or DisplayPort tunneling, the patch uses `pci_walk_bus()` to specifically inspect for `PCI_BASE_CLASS_STORAGE` (`0x01`):
+- External USB4 NVMe boot drives are safely identified and preserved without dropping the link.
 - Multi-function docks (Ethernet `0x02`, USB `0x0c`, audio `0x04`) are cleanly excluded, allowing standard DisplayPort tunnel configuration.
-- Booting with `thunderbolt.host_reset=0` also restores full 40 Gbps PCIe Gen 4 x4 throughput and cleanly enables the 64 MiB Host Memory Buffer (HMB) via Intel VT-d / AMD-Vi.
+- Booting with preserved tunnels restores full 40 Gbps PCIe Gen 4 x4 throughput and cleanly enables the 64 MiB Host Memory Buffer (HMB) via Intel VT-d / AMD-Vi.
 
 ### 3. Proposed Kernel Task Reopening & Patch
 We request that the Ubuntu kernel task under `linux (Ubuntu)` be evaluated for this fix.
