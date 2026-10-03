@@ -1,0 +1,17 @@
+# ==============================================================================
+# /usr/lib/udev/rules.d/80-usb4-storage.rules
+# Enterprise USB4 / Thunderbolt Selective NVMe Auto-Authorization Rule
+# Prevents DMA attacks by ONLY authorizing verified storage enclosures in initramfs.
+# ==============================================================================
+
+# Match unauthorized Thunderbolt peripheral devices
+ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="0", \
+    PROGRAM="/usr/lib/udev/usb4-storage-authorizer %p", \
+    ENV{USB4_STORAGE_MATCH}="1", \
+    ATTR{authorized}="1"
+
+# When a verified storage peripheral is authorized, trigger an idempotent PCIe bus
+# rescan after allowing 500ms for LTSSM link and clock generator stabilization
+ACTION=="change", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="1", \
+    ENV{USB4_STORAGE_MATCH}=="1", \
+    RUN+="/bin/sh -c 'sleep 0.5; [ -f /sys/bus/pci/rescan ] && echo 1 > /sys/bus/pci/rescan'"

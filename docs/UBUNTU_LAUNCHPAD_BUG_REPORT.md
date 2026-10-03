@@ -165,8 +165,8 @@ If an active pre-boot tunnel is detected, the driver preserves `discover = true`
  		return;
  	}
  
-+	if (nhi_has_active_boot_device(nhi)) {
-+		dev_info(nhi->dev, "preserving pre-boot PCIe tunnel for active boot device\n");
++	if (nhi_has_active_storage(nhi)) {
++		dev_info(nhi->dev, "preserving pre-boot PCIe tunnel for active storage device\n");
 +		return;
 +	}
 +

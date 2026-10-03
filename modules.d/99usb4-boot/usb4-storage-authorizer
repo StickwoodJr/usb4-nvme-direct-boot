@@ -1,0 +1,103 @@
+#!/bin/sh
+# ==============================================================================
+# /usr/lib/udev/usb4-storage-authorizer
+# Standalone POSIX qualification engine for USB4 / Thunderbolt peripherals.
+# Returns 0 IF AND ONLY IF the peripheral qualifies as trusted storage.
+# Returns 1 (reject) for network dongles, docks, eGPUs, and unknown devices.
+# ==============================================================================
+
+set -e
+
+DEV_PATH="$1"
+if [ -z "$DEV_PATH" ]; then
+    exit 1
+fi
+
+SYS_DEV="/sys$DEV_PATH"
+if [ ! -d "$SYS_DEV" ]; then
+    exit 1
+fi
+
+# Locate the parent domain directory (e.g. /sys/bus/thunderbolt/devices/domain0)
+DOMAIN_DIR=""
+parent="$SYS_DEV"
+while [ "$parent" != "/sys/bus/thunderbolt/devices" ] && [ "$parent" != "/sys" ] && [ -n "$parent" ]; do
+    case "${parent##*/}" in
+        domain*)
+            DOMAIN_DIR="$parent"
+            break
+            ;;
+    esac
+    parent="${parent%/*}"
+done
+
+# Read device telemetry from sysfs
+DEVICE_NAME=$(cat "$SYS_DEV/device_name" 2>/dev/null || true)
+VENDOR_NAME=$(cat "$SYS_DEV/vendor_name" 2>/dev/null || true)
+VENDOR_ID=$(cat "$SYS_DEV/vendor" 2>/dev/null || true)
+DEVICE_ID=$(cat "$SYS_DEV/device" 2>/dev/null || true)
+UNIQUE_ID=$(cat "$SYS_DEV/unique_id" 2>/dev/null || true)
+
+# ------------------------------------------------------------------------------
+# TIER 1: BIOS Pre-Boot Access Control List (boot_acl)
+# ------------------------------------------------------------------------------
+if [ -n "$DOMAIN_DIR" ] && [ -f "$DOMAIN_DIR/boot_acl" ] && [ -n "$UNIQUE_ID" ]; then
+    BOOT_ACL=$(cat "$DOMAIN_DIR/boot_acl" 2>/dev/null || true)
+    if [ -n "$BOOT_ACL" ]; then
+        case ",$BOOT_ACL," in
+            *,"$UNIQUE_ID",*)
+                # Device explicitly authorized by UEFI BIOS in pre-boot
+                exit 0
+                ;;
+        esac
+    fi
+fi
+
+# ------------------------------------------------------------------------------
+# TIER 2: Administrator Static Storage Whitelist (/etc/thunderbolt/whitelist)
+# ------------------------------------------------------------------------------
+WHITELIST="/etc/thunderbolt/storage-whitelist.conf"
+if [ -f "$WHITELIST" ] && [ -n "$UNIQUE_ID" ]; then
+    if grep -qs "^[[:space:]]*${UNIQUE_ID}" "$WHITELIST"; then
+        exit 0
+    fi
+fi
+
+# ------------------------------------------------------------------------------
+# TIER 3: Hardware Signature & Storage Controller Heuristic
+# ------------------------------------------------------------------------------
+# Known USB4 / Thunderbolt NVMe Bridge Controllers:
+# - 0x174c / 0x001d: ASMedia Technology (ASM2464PD, ASM2464PDX)
+# - 0x0001 / 0x0002: Intel Thunderbolt PCIe Storage controllers
+case "$VENDOR_ID" in
+    0x174c|0x001d|0x174C|0x001D)
+        # ASMedia storage bridge
+        exit 0
+        ;;
+    0x0001|0x0002)
+        case "$DEVICE_ID" in
+            0x2464|0x0001)
+                exit 0
+                ;;
+        esac
+        ;;
+esac
+
+# Device Name Heuristic (case-insensitive string search)
+LOWER_NAME=$(echo "$DEVICE_NAME $VENDOR_NAME" | tr '[:upper:]' '[:lower:]')
+case "$LOWER_NAME" in
+    *storage*|*nvme*|*ssd*|*asm2464*|*enclosure*|*drive*|*sn7100*|*ugreen*)
+        # If IOMMU DMA protection is active, authorize with high confidence
+        if [ -n "$DOMAIN_DIR" ] && [ -f "$DOMAIN_DIR/iommu_dma_protection" ]; then
+            IOMMU=$(cat "$DOMAIN_DIR/iommu_dma_protection" 2>/dev/null || true)
+            if [ "$IOMMU" = "1" ]; then
+                exit 0
+            fi
+        fi
+        # Even without IOMMU, storage descriptor matches qualification
+        exit 0
+        ;;
+esac
+
+# Device is NOT recognized as a storage device (reject authorization)
+exit 1

@@ -46,6 +46,14 @@ cp "${SCRIPT_DIR}/scripts/verify_usb4_environment.sh" "${BUILD_DIR}/usr/share/us
 cp "${SCRIPT_DIR}/scripts/nvme_health_audit.sh" "${BUILD_DIR}/usr/share/usb4-nvme-direct-boot/scripts/"
 chmod 755 "${BUILD_DIR}/usr/share/usb4-nvme-direct-boot/scripts/"*.sh
 
+# Copy dracut module if present
+if [[ -d "${SCRIPT_DIR}/modules.d/99usb4-boot" ]]; then
+    mkdir -p "${BUILD_DIR}/usr/lib/dracut/modules.d/99usb4-boot"
+    cp -r "${SCRIPT_DIR}/modules.d/99usb4-boot/"* "${BUILD_DIR}/usr/lib/dracut/modules.d/99usb4-boot/"
+    chmod 755 "${BUILD_DIR}/usr/lib/dracut/modules.d/99usb4-boot/"*.sh 2>/dev/null || true
+    chmod 755 "${BUILD_DIR}/usr/lib/dracut/modules.d/99usb4-boot/usb4-storage-authorizer" 2>/dev/null || true
+fi
+
 # Copy documentation & license
 cp "${SCRIPT_DIR}/README.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 cp "${SCRIPT_DIR}/LICENSE" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/copyright"
