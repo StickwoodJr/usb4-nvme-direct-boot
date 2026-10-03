@@ -2,11 +2,24 @@
 ## Targeted Workaround & Kernel Forensics for Direct UEFI Booting over PCIe Gen 4 x4
 
 [![CI Tests](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions/workflows/ci.yml/badge.svg)](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions)
+[![LKML Patch](https://img.shields.io/badge/LKML-lore.kernel.org%2Flinux--usb-brightgreen)](https://lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com/T/#u)
 [![Launchpad Bug](https://img.shields.io/badge/Launchpad-LP%232167764-orange)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
 [![Protocol](https://img.shields.io/badge/Protocol-USB4%20%2F%20TB4%2040Gbps-blue)](#)
-[![Status](https://img.shields.io/badge/Status-Lab%20Verified%20%2F%20Workaround-blue)](#)
+[![Status](https://img.shields.io/badge/Status-Upstream%20Submitted-blue)](#)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+---
+
+### 🌐 Upstream Kernel Tracking & Public Archives
+
+The architectural in-kernel fix for this regression has been officially submitted upstream to the Linux Kernel Mailing List (LKML) and maintainers:
+
+- **LKML / linux-usb Thread:** [lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com](https://lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com/T/#u)
+- **Ubuntu Launchpad Bug Tracker:** [LP #2167764 (Tracked in Ubuntu 26.04 Stonking)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
+- **Patchwork Work Item:** [patchwork.kernel.org/project/linux-usb](https://patchwork.kernel.org/project/linux-usb/list/)
+- **Upstream Patch:** [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch)
+
+---
 
 > [!WARNING]
 > **Experimental Workstation Tooling & System Scope:**
