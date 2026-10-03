@@ -45,39 +45,39 @@ echo "======================================================================"
 
 # Test 1: Help message
 test_assert "Display Help via -h" \
-    "${CLI} -h" 0 "USAGE:"
+    "\"${CLI}\" -h" 0 "USAGE:"
 
 # Test 2: Help message via --help
 test_assert "Display Help via --help" \
-    "${CLI} --help" 0 "PRIMARY COMMANDS:"
+    "\"${CLI}\" --help" 0 "PRIMARY COMMANDS:"
 
 # Test 3: Unknown argument error handling
 test_assert "Reject unknown options" \
-    "${CLI} --invalid-flag" 1 "Unknown option"
+    "\"${CLI}\" --invalid-flag" 1 "Unknown option"
 
 # Test 4: Read-only Audit Mode
 test_assert "Run Audit Mode" \
-    "${CLI} --audit" 0 "PRE-FLIGHT AUDIT"
+    "\"${CLI}\" --audit" 0 "PRE-FLIGHT AUDIT"
 
 # Test 5: Dry-Run Mode
 test_assert "Run Dry-Run Mode" \
-    "${CLI} --dry-run" 0 "DRY-RUN EXECUTION PREVIEW"
+    "\"${CLI}\" --dry-run" 0 "DRY-RUN EXECUTION PREVIEW"
 
 # Test 6: Dry-Run Rollback
 test_assert "Run Rollback Dry-Run" \
-    "${CLI} --rollback --dry-run" 0 "ROLLBACK: USB4 Direct-Boot"
+    "\"${CLI}\" --rollback --dry-run" 0 "ROLLBACK: USB4 Direct-Boot"
 
 # Test 7: Non-root protection on --apply
 test_assert "Reject --apply without root" \
-    "${SCRIPT_DIR}/scripts/apply_usb4_direct_boot_fix.sh --apply" 1 "must be run as root"
+    "\"${SCRIPT_DIR}/scripts/apply_usb4_direct_boot_fix.sh\" --apply" 1 "must be run as root"
 
 # Test 8: Custom UUID passing in dry-run
 test_assert "Honor --uuid override in dry-run" \
-    "${CLI} --dry-run --uuid 11111111-2222-3333-4444-555555555555" 0 "11111111-2222-3333-4444-555555555555"
+    "\"${CLI}\" --dry-run --uuid 11111111-2222-3333-4444-555555555555" 0 "11111111-2222-3333-4444-555555555555"
 
 # Test 9: Verify mode runs cleanly
 test_assert "Run Verify Mode" \
-    "${CLI} --verify" 0 "PRE-FLIGHT VERIFICATION"
+    "\"${CLI}\" --verify" 0 "PRE-FLIGHT VERIFICATION"
 
 echo "======================================================================"
 echo " Results: ${PASS_COUNT} of ${TEST_COUNT} tests passed."

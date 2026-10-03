@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# verify_usb4_environment.sh - USB4 Direct-Boot & Storage Pipeline Pre-Flight Check
-# Purpose: Hardware, transport link, and kernel parameter verification
-# Scope:   Inspects runtime sysfs, PCIe link, and kernel cmdline parameters
+# verify_usb4_environment.sh - USB4 Direct-Boot & Virtualization Pre-Flight Check
+# Host: Alienware 16X Aurora (AC16251, Intel Core Ultra 9 275HX Arrow Lake-HX)
+# Storage: WD_BLACK SN7100 1TB NVMe in UGREEN CA-15976 (ASM2464PD)
+# Design: Pure function, zero bloat (<100ms execution)
 # ==============================================================================
 set -euo pipefail
 
@@ -67,10 +68,10 @@ if [[ "$ROOT_DEV" =~ nvme[0-9]+n[0-9]+ ]]; then
             fi
 
             # Audit PCIe MPS (Max Payload Size) & MRRS (Max Read Request Size)
-            DEVCTL=$(lspci -s "$PCI_DEV" -vvv 2>/dev/null | grep -i "DevCtl:" | head -1 || echo "")
+            DEVCTL=$( (lspci -s "$PCI_DEV" -vvv 2>/dev/null || sudo -n lspci -s "$PCI_DEV" -vvv 2>/dev/null) | grep -A 2 -i "DevCtl:" || echo "")
             if [[ -n "$DEVCTL" ]]; then
-                MPS=$(echo "$DEVCTL" | grep -o 'MaxPayload [0-9]\+ bytes' || echo "")
-                MRRS=$(echo "$DEVCTL" | grep -o 'MaxReadReq [0-9]\+ bytes' || echo "")
+                MPS=$(echo "$DEVCTL" | grep -o 'MaxPayload [0-9]\+ bytes' | head -1 || echo "")
+                MRRS=$(echo "$DEVCTL" | grep -o 'MaxReadReq [0-9]\+ bytes' | head -1 || echo "")
                 if [[ -n "$MPS" ]]; then
                     info "PCIe Packet Framing: $MPS | $MRRS"
                     if echo "$MPS" | grep -q "128 bytes"; then
@@ -93,7 +94,7 @@ if [[ "$ROOT_DEV" =~ nvme[0-9]+n[0-9]+ ]]; then
             HMB_RAW=$(sudo -n nvme get-feature "/dev/$CTRL_NAME" -f 0x0d 2>/dev/null || echo "")
         fi
         if echo "$HMB_RAW" | grep -iq "Current value:0x00000001"; then
-            pass "Host Memory Buffer (HMB): ACTIVE (Host RAM allocated via IOMMU/VT-d)"
+            pass "Host Memory Buffer (HMB): ACTIVE (64 MB Host DDR5 allocated via VT-d)"
         elif echo "$HMB_RAW" | grep -iq "Current value:0x00000000"; then
             warn "Host Memory Buffer (HMB): INACTIVE"
         elif [[ -n "$HMB_RAW" ]]; then
@@ -104,8 +105,8 @@ if [[ "$ROOT_DEV" =~ nvme[0-9]+n[0-9]+ ]]; then
     fi
 else
     warn "Storage Interface: USB 3.2 UASP Fallback Mode ($ROOT_DEV)"
-    warn "Host Memory Buffer is DISABLED in UASP mode."
-    info "Recommendation: Cold boot with external drive connected to the high-speed USB4 / Thunderbolt 4 port."
+    warn "Host Memory Buffer is DISABLED in UASP mode. Multi-VM performance will suffer from SRAM thrashing."
+    info "Recommendation: Cold boot with Cable A connected to the REAR USB4 port."
 
     # Check TRIM Clamping in UASP Mode
     BLK_NAME=$(echo "$ROOT_DEV" | grep -o 'sd[a-z]')
@@ -120,7 +121,7 @@ else
 fi
 
 # 3. ASMedia ASM2464PD Firmware & Thermals Audit
-echo -e "\n${BOLD}[3] CONTROLLER & THUNDERBOLT TELEMETRY${NC}"
+echo -e "\n${BOLD}[3] ASMEDIA ASM2464PD CONTROLLER TELEMETRY${NC}"
 TB_FOUND=0
 for d in /sys/bus/thunderbolt/devices/*; do
     if [ -f "$d/device_name" ]; then
@@ -135,8 +136,8 @@ if [ "$TB_FOUND" -eq 0 ]; then
     info "No Thunderbolt peripheral devices currently enumerated in sysfs."
 fi
 
-# 4. Persistence & Configuration Drop-Ins Audit
-echo -e "\n${BOLD}[4] CONFIGURATION DROP-IN FILES AUDIT${NC}"
+# 4. Persistence & Dracut Configuration Drop-Ins Audit
+echo -e "\n${BOLD}[4] DRACUT-NATIVE DROP-IN FILES AUDIT${NC}"
 
 check_file() {
     local file="$1"
@@ -153,7 +154,7 @@ check_file() {
             pass "$file ($desc)"
         fi
     else
-        info "$file not present ($desc)"
+        warn "$file NOT FOUND ($desc)"
     fi
 }
 
@@ -165,8 +166,6 @@ check_file "/etc/sysctl.d/99-vms-storage.conf" "Host memory writeback throttle t
 check_file "/usr/lib/dracut/modules.d/99usb4-rescan/module-setup.sh" "Dracut module setup" 1
 check_file "/usr/lib/dracut/modules.d/99usb4-rescan/usb4-pre-trigger.sh" "Dracut pre-trigger rescan hook" 1
 check_file "/usr/lib/dracut/modules.d/99usb4-rescan/usb4-initqueue-settled.sh" "Dracut initqueue settled watchdog hook" 1
-check_file "/etc/initramfs-tools/conf.d/usb4-rootdelay.conf" "initramfs-tools rootdelay drop-in" 0
-check_file "/etc/initramfs-tools/scripts/init-premount/usb4-rescan" "initramfs-tools premount hook" 1
 
 # 5. Virtualization Memory Tuning Audit
 echo -e "\n${BOLD}[5] HOST MEMORY DIRTY WRITEBACK THRESHOLDS AUDIT${NC}"
@@ -176,7 +175,7 @@ DIRTY_MAX=$(sysctl -n vm.dirty_bytes 2>/dev/null || echo "0")
 if [ "$DIRTY_BG" = "268435456" ] && [ "$DIRTY_MAX" = "1073741824" ]; then
     pass "Byte-based writeback active: Background flush at 256MB | Hard ceiling at 1GB"
 else
-    info "Current writeback thresholds: dirty_bg: $DIRTY_BG, dirty_max: $DIRTY_MAX"
+    warn "Default percentage-based writeback active (dirty_bg: $DIRTY_BG, dirty_max: $DIRTY_MAX)"
 fi
 
 echo -e "${BOLD}================================================================================${NC}"

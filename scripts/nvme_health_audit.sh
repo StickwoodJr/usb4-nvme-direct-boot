@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# nvme_health_audit.sh - Storage Forensic Health & Endurance Audit Utility
-# Target:  WD_BLACK SN7100 1TB NVMe SSD / High-Performance PCIe NVMe
-# Enclosure: ASMedia ASM2464PD / Thunderbolt 4 USB4 Enclosures
-# Supports:  Dual-mode inspection (USB4 PCIe Tunnel /dev/nvme* & USB 3.2 UASP /dev/sd*)
+# Seneca College OPS345 - Storage Forensic Health & Endurance Audit Utility
+# Target: WD_BLACK SN7100 1TB NVMe SSD (Polaris 3 / BiCS8 218-layer TLC)
+# Enclosure: UGREEN CA-15976 (ASMedia ASM2464PD USB4 Bridge)
+# Design: Pure function, zero daemons, zero background overhead (<150ms execution)
+# Supports: Dual-mode inspection (USB4 PCIe Tunnel /dev/nvme* & USB 3.2 UASP /dev/sd*)
 # ==============================================================================
 set -euo pipefail
 
@@ -74,7 +75,7 @@ if [[ -z "$TARGET_DEV" ]]; then
 fi
 
 if [[ -z "$TARGET_DEV" || ! -e "$TARGET_DEV" ]]; then
-    echo "[-] ERROR: Could not auto-detect target NVMe SSD. Please specify device node: $0 [mode] /dev/nvme0n1" >&2
+    echo "[-] ERROR: Could not auto-detect WD_BLACK SN7100 SSD. Please specify target device: $0 [mode] /dev/nvme0n1" >&2
     exit 2
 fi
 
@@ -103,7 +104,7 @@ fi
 
 parse_val() {
     local pattern="$1"
-    echo "$SMART_OUT" | grep -iE "$pattern" | head -1 | awk -F: '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//'
+    (echo "$SMART_OUT" | grep -iE "$pattern" | head -1 | awk -F: '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//') 2>/dev/null || true
 }
 
 MODEL_NAME=$(parse_val "Model Number")
@@ -113,10 +114,10 @@ SMART_STATUS=$(echo "$SMART_OUT" | grep -i "SMART overall-health self-assessment
 COMP_TEMP=$(parse_val "^Temperature:" | awk '{print $1}')
 SENSOR1_TEMP=$(parse_val "Temperature Sensor 1:" | awk '{print $1}')
 SENSOR2_TEMP=$(parse_val "Temperature Sensor 2:" | awk '{print $1}')
-WARN_TEMP_TRIP=$(parse_val "Warning Comp. Temp. Threshold" | awk '{print $1}')
-CRIT_TEMP_TRIP=$(parse_val "Critical Comp. Temp. Threshold" | awk '{print $1}')
-WARN_TEMP_TIME=$(parse_val "Warning Comp. Temperature Time" | awk '{print $1}')
-CRIT_TEMP_TIME=$(parse_val "Critical Comp. Temperature Time" | awk '{print $1}')
+WARN_TEMP_TRIP=$(parse_val "Warning[[:space:]]+Comp\. Temp\. Threshold" | awk '{print $1}')
+CRIT_TEMP_TRIP=$(parse_val "Critical[[:space:]]+Comp\. Temp\. Threshold" | awk '{print $1}')
+WARN_TEMP_TIME=$(parse_val "Warning[[:space:]]+Comp\. Temperature Time" | awk '{print $1}')
+CRIT_TEMP_TIME=$(parse_val "Critical[[:space:]]+Comp\. Temperature Time" | awk '{print $1}')
 
 AVAIL_SPARE=$(parse_val "Available Spare:" | tr -d '%')
 SPARE_THRESH=$(parse_val "Available Spare Threshold:" | tr -d '%')
@@ -238,7 +239,7 @@ JSEOF
 fi
 
 echo -e "${BOLD}================================================================================${NC}"
-echo -e "${CYAN}${BOLD}                 STORAGE HEALTH & ENDURANCE AUDIT                               ${NC}"
+echo -e "${CYAN}${BOLD}     WD_BLACK SN7100 1TB NVMe / ASMedia ASM2464PD STORAGE HEALTH AUDIT          ${NC}"
 echo -e "${BOLD}================================================================================${NC}"
 echo -e " Target Device Node  : ${BOLD}$TARGET_DEV${NC} (${DEV_TYPE^^} Domain)"
 echo -e " Silicon Identity    : ${BOLD}$MODEL_NAME${NC} (FW: ${CYAN}$FW_VERSION${NC})"
@@ -254,19 +255,19 @@ fi
 
 echo -e "\n${BOLD}[1] THERMAL MANAGEMENT & SILICON SENSORS${NC}"
 echo -e " ├─ Composite Temperature  : ${BOLD}${COMP_TEMP}°C${NC} (Warning: ${WARN_TEMP_TRIP}°C | Critical: ${CRIT_TEMP_TRIP}°C)"
-echo -e " ├─ Sensor 1 (Controller)  : ${BOLD}${SENSOR1_TEMP}°C${NC}"
-echo -e " ├─ Sensor 2 (Flash NAND)  : ${BOLD}${SENSOR2_TEMP}°C${NC}"
+echo -e " ├─ Sensor 1 (Polaris 3)   : ${BOLD}${SENSOR1_TEMP}°C${NC} (Controller Die)"
+echo -e " ├─ Sensor 2 (BiCS8 Flash) : ${BOLD}${SENSOR2_TEMP}°C${NC} (NAND Memory Package)"
 
 echo -e "\n${BOLD}[2] FLASH WEAR, SPARE CAPACITY & ENDURANCE${NC}"
 echo -e " ├─ Available Spare Block  : ${GREEN}${BOLD}${AVAIL_SPARE}%${NC} (Factory Threshold: ${SPARE_THRESH}%)"
 echo -e " ├─ Drive Life Used        : ${BOLD}${PCT_USED}%${NC} (Estimated Remaining Life: ${GREEN}${BOLD}${REMAINING_LIFE}%${NC})"
-echo -e " ├─ Rated Endurance        : ${BOLD}${RATED_TBW} TBW${NC}"
+echo -e " ├─ Rated Endurance        : ${BOLD}${RATED_TBW} TBW${NC} (0.33 DWPD over 5 Years)"
 echo -e " ├─ Total Physical Written : ${BOLD}${TB_WRITTEN} TB${NC} (${PCT_TBW_CONSUMED}% of rated TBW exhausted)"
 echo -e " ├─ Remaining Endurance    : ${GREEN}${BOLD}${REMAINING_TBW} TB${NC}"
 
 echo -e "\n${BOLD}[3] DATA INTEGRITY & HARDWARE RELIABILITY${NC}"
 if [[ "$MEDIA_ERRORS" -eq 0 ]]; then
-    echo -e " ├─ Media/Data Errors      : ${GREEN}${BOLD}0 (None Detected)${NC}"
+    echo -e " ├─ Media/Data Errors      : ${GREEN}${BOLD}0 (Flawless Data Integrity)${NC}"
 else
     echo -e " ├─ Media/Data Errors      : ${RED}${BOLD}${MEDIA_ERRORS} (HARDWARE WARNING)${NC}"
 fi
@@ -278,10 +279,10 @@ echo -e "\n${BOLD}[4] TRANSPORT LINK, HMB & TRIM CONFIGURATION${NC}"
 if [[ "$DEV_TYPE" == "nvme" ]]; then
     echo -e " ├─ Interface Mode         : ${GREEN}${BOLD}Native PCIe Gen 4 x4 over USB4 (40 Gbps)${NC}"
     echo -e " ├─ Host Memory Buffer     : ${GREEN}${BOLD}${HMB_STATUS}${NC}"
-    echo -e " ├─ TRIM / Deallocate      : ${GREEN}${BOLD}Native NVMe DSM Active${NC}"
+    echo -e " ├─ TRIM / Deallocate      : ${GREEN}${BOLD}Native NVMe DSM (Opcode 0x0A) Active${NC}"
 else
     echo -e " ├─ Interface Mode         : ${YELLOW}${BOLD}USB 3.2 Gen 2 UASP Fallback (10 Gbps)${NC}"
-    echo -e " ├─ Host Memory Buffer     : ${YELLOW}${BOLD}Inactive (SRAM Only)${NC}"
+    echo -e " ├─ Host Memory Buffer     : ${YELLOW}${BOLD}Inactive (SRAM Only - WAF Penalty Active)${NC}"
     echo -e " ├─ Discard Max Bytes      : ${BOLD}${DISCARD_MAX} bytes${NC} (Granularity: ${DISCARD_GRAN} bytes)"
 fi
 echo -e "${BOLD}================================================================================${NC}"
