@@ -1,6 +1,6 @@
 From: StickwoodJr <stickwood_jr@hotmail.com>
 Date: Sat, 3 Oct 2026 14:10:00 -0400
-Subject: [PATCH] thunderbolt: Preserve pre-boot PCIe tunnels for external boot storage
+Subject: [PATCH] thunderbolt: Preserve pre-boot PCIe tunnels for active storage devices
 
 In Linux 6.8+, commits 0fc70886569c ("thunderbolt: Reset USB4 v2 host
 router") and 59a54c5f3dbd ("thunderbolt: Reset topology created by the boot
