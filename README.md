@@ -14,13 +14,13 @@
 
 I am a Computer Systems Technology student at Seneca College taking **OPS345** (Advanced Linux System Administration). Our coursework requires running up to 6 concurrent Linux server virtual machines (DNS, DHCP, Web, Mail, Database, Storage) under KVM/QEMU.
 
-My laptop is an **Alienware 16X Aurora** with an Intel Core Ultra 9 275HX (Arrow Lake-HX). The internal 1TB SSD has my Windows 11 installation locked with BitLocker behind Intel VMD, which I cannot touch or risk corrupting. To run my Linux coursework, I bought a **1TB WD_BLACK SN7100 NVMe SSD** and a **UGREEN 40 Gbps USB4 enclosure (ASMedia ASM2464PD)**.
+My laptop is an **Alienware 16X Aurora** with an Intel Core Ultra 9 275HX (Arrow Lake-HX). The internal 1TB SSD has my Windows 11 installation locked with BitLocker behind Intel VMD, which I cannot touch or risk corrupting. To run my Linux coursework, I bought a **1TB WD_BLACK SN7100 NVMe SSD**, a **UGREEN 40 Gbps USB4 enclosure (ASMedia ASM2464PD)**, and hooked it up using a high-quality certified 40 Gbps USB4 cable.
 
-When I tried to boot Ubuntu 26.04 from the rear USB4 port:
+When I tried to install and boot Ubuntu 26.04 from the rear USB4 port using that high-quality 40 Gbps cable:
 1. **The installer crashed** at `grub-install` with an I/O error (`EIO`).
 2. `dmesg` showed the PCIe link downshifting from **16.0 GT/s x4 down to 2.5 GT/s x1**, getting slammed by PCIe AER correctable error storms.
-3. Swapping to a cheap 6-foot phone charging cable let the installer finish, but locked the drive into slow USB 3.2 UASP fallback mode (`/dev/sda` at ~1,050 MB/s).
-4. Booting with the 40 Gbps cable on the rear port dropped into Dell SupportAssist or an emergency shell (`ALERT! UUID does not exist`).
+3. In frustration, I swapped to a cheap 6-foot phone charging cable — and the installer finished! But it locked the drive into slow USB 3.2 UASP fallback mode (`/dev/sda` at ~1,050 MB/s).
+4. Switching back to the high-quality 40 Gbps cable on the rear port dropped into Dell SupportAssist or an emergency shell (`ALERT! UUID does not exist`).
 
 Online forums and AI tools told me *"the BIOS doesn't support USB4 boot, you have to use a two-stage bootloader on your internal drive."* 
 
