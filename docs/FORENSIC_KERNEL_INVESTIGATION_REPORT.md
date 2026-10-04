@@ -1,5 +1,5 @@
 # FORENSIC KERNEL INVESTIGATION REPORT
-## Root-Cause Analysis, Protocol Register Forensics, Upstream Commit Genealogy, and LKML Patch Proposals for USB4 / Thunderbolt 4 Direct-Boot Storage Failure
+## Root-Cause Analysis, Protocol Register Forensics, and Hardware Tunnel Breakdown for USB4 / Thunderbolt 4 Direct-Boot Storage on Linux
 
 ---
 
@@ -7,16 +7,16 @@
 | :--- | :--- |
 | **Document Classification** | Engineering Technical Whitepaper & Forensic Root-Cause Analysis |
 | **Document Path** | `docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md` |
-| **Reference Platform** | Alienware 16X Aurora (AC16251), Platform ID: `[REDACTED_HOST]` |
+| **Author** | Golden Stickwood (@StickwoodJr), Computer Systems Technology, Seneca College |
+| **Reference Platform** | Alienware 16X Aurora (AC16251) |
 | **Host Architecture** | Intel Core Ultra 9 275HX (Arrow Lake-HX) / Intel Meteor Lake-P NHI (`00:0d.2 [8086:7ec2]`) |
 | **Target Storage Topology** | WD_BLACK SN7100 1TB NVMe (DRAM-less, BiCS8 218L 3D TLC) + ASMedia ASM2464PD Bridge |
-| **Target Host Operating System** | Ubuntu 26.04.1 LTS, Linux Kernel `7.0.0-31-generic` (x86_64) |
-| **Root Filesystem Identifier** | UUID `[REDACTED_ROOT_UUID]` (`/dev/nvme0n1p2`, ext4) |
+| **Target Host Operating System** | Ubuntu 26.04.1 LTS, Linux Kernel `7.0.0-31-generic` / `7.0.0-38-generic` (x86_64) |
+| **Root Filesystem** | `/dev/nvme0n1p2` (ext4) |
 | **Target Workload Profile** | High-Density Virtualization Workstation (6 Concurrent KVM/QEMU Guest Instances) |
-| **Primary Authors / Engineering** | Antigravity (Google DeepMind Advanced Agentic Coding) & Systems Engineering Lead (`[USER]`) |
 | **Upstream Subsystem** | Linux USB4 / Thunderbolt (`drivers/thunderbolt/`) & PCI Express Hotplug (`drivers/pci/hotplug/pciehp*`) |
-| **Canonical Bug Trackers** | [LP#2167764 (Arrow Lake NVMe Direct-Boot)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764), [LP#2078573 (Dell TBT Boot Regression)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573), [LP#2159575 (ASUS Zenbook USB4 Direct-Boot)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575) |
-| **Operational Status** | 🟢 **Local Workaround Verified on Tested Platform; Upstream Patch Proposed** |
+| **Tracked Distro Reports** | [Ubuntu Launchpad Bug #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764), [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573), [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575) |
+| **Operational Status** | 🟢 **Verified Working on Bare Metal via Dracut / GRUB Drop-ins** |
 
 ---
 

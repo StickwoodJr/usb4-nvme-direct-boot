@@ -1,214 +1,194 @@
-# USB4 / Thunderbolt 4 NVMe Direct-Boot Workaround Suite for Linux
-## Targeted Workaround & Kernel Forensics for Direct UEFI Booting over PCIe Gen 4 x4
+# USB4 NVMe Direct-Boot on Linux: Troubleshooting Journey & Workstation Guide
 
-[![CI Tests](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions/workflows/ci.yml/badge.svg)](https://github.com/StickwoodJr/usb4-nvme-direct-boot/actions)
-[![LKML Patch](https://img.shields.io/badge/LKML-lore.kernel.org%2Flinux--usb-brightgreen)](https://lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com/T/#u)
-[![Launchpad Bug](https://img.shields.io/badge/Launchpad-LP%232167764-orange)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
-[![Protocol](https://img.shields.io/badge/Protocol-USB4%20%2F%20TB4%2040Gbps-blue)](#)
-[![Status](https://img.shields.io/badge/Status-Upstream%20Submitted-blue)](#)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+### How I diagnosed the USB4 boot crash on my Alienware laptop, fixed the PCIe tunnel teardown, and got 3,624 MB/s multi-VM storage on Ubuntu 26.04
 
----
-
-### 🌐 Upstream Kernel Tracking & Public Archives
-
-The architectural in-kernel fix for this regression has been officially submitted upstream to the Linux Kernel Mailing List (LKML) and maintainers:
-
-- **LKML / linux-usb Thread:** [lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com](https://lore.kernel.org/linux-usb/BN8PR19MB275472A84381924206F01AE0FD882@BN8PR19MB2754.namprd19.prod.outlook.com/T/#u)
-- **Ubuntu Launchpad Bug Tracker:** [LP #2167764 (Tracked in Ubuntu 26.04 Stonking)](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764)
-- **Patchwork Work Item:** [patchwork.kernel.org/project/linux-usb](https://patchwork.kernel.org/project/linux-usb/list/)
-- **Upstream Patch:** [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/Kernel-6.8%2B%20%7C%207.0-brightgreen.svg)](#)
+[![Read Speed](https://img.shields.io/badge/Read%20Speed-3%2C588%20MB%2Fs-informational.svg)](#)
+[![HMB Status](https://img.shields.io/badge/HMB-64%20MB%20Active-green.svg)](#)
+[![Verified on Bare Metal](https://img.shields.io/badge/Hardware-Alienware%2016X%20Aurora-orange.svg)](#)
 
 ---
 
-> [!WARNING]
-> **Experimental Workstation Tooling & System Scope:**
-> This repository provides kernel command-line parameters (`thunderbolt.host_reset=0`, `pcie_port_pm=off`, `thunderbolt.clx=0`) and initial ramdisk drop-in configurations engineered to prevent pre-boot PCIe tunnel teardowns when direct-booting Linux from external NVMe SSDs.
-> 
-> Applying these configurations modifies system boot arguments. Disabling PCIe link power management (`pcie_port_pm=off`, `clx=0`) prevents low-power link retraining disconnects during boot, but can increase idle power draw on laptops and alter suspend/resume behavior on complex docking stations. Test thoroughly on your specific hardware. Reversible at any time with `./setup_usb4_boot.sh --rollback`.
+## The Story in 60 Seconds
+
+I am a Computer Systems Technology student at Seneca College taking **OPS345** (Advanced Linux System Administration). Our coursework requires running up to 6 concurrent Linux server virtual machines (DNS, DHCP, Web, Mail, Database, Storage) under KVM/QEMU.
+
+My laptop is an **Alienware 16X Aurora** with an Intel Core Ultra 9 275HX (Arrow Lake-HX). The internal 1TB SSD has my Windows 11 installation locked with BitLocker behind Intel VMD, which I cannot touch or risk corrupting. To run my Linux coursework, I bought a **1TB WD_BLACK SN7100 NVMe SSD** and a **UGREEN 40 Gbps USB4 enclosure (ASMedia ASM2464PD)**.
+
+When I tried to boot Ubuntu 26.04 from the rear USB4 port:
+1. **The installer crashed** at `grub-install` with an I/O error (`EIO`).
+2. `dmesg` showed the PCIe link downshifting from **16.0 GT/s x4 down to 2.5 GT/s x1**, getting slammed by PCIe AER correctable error storms.
+3. Swapping to a cheap 6-foot phone charging cable let the installer finish, but locked the drive into slow USB 3.2 UASP fallback mode (`/dev/sda` at ~1,050 MB/s).
+4. Booting with the 40 Gbps cable on the rear port dropped into Dell SupportAssist or an emergency shell (`ALERT! UUID does not exist`).
+
+Online forums and AI tools told me *"the BIOS doesn't support USB4 boot, you have to use a two-stage bootloader on your internal drive."* 
+
+**That was completely wrong.** I checked the UEFI boot menu, and GRUB was loading across the rear port just fine. The problem was happening inside the Linux kernel: in Linux 6.8+, `thunderbolt.ko` defaults to `host_reset = true`. During early boot, the driver issues a hardware reset to the USB4 Host Router, **severing the active PCIe tunnel that the root filesystem is running on**. To make things worse, Ubuntu 26.04 switched to **dracut**, meaning all legacy `initramfs-tools` guides online were completely useless.
+
+This repository contains the complete troubleshooting writeup and a **turnkey 2-minute installer** that fixes the issue cleanly without recompiling your kernel.
 
 ---
 
-## 📋 Hardware & Distribution Support Matrix
+## Verified Benchmarks (Alienware 16X Aurora on Rear USB4)
 
-| Subsystem / Layer | Validated Hardware / Environment | Experimental / Untested | Unsupported / Out of Scope |
-| :--- | :--- | :--- | :--- |
-| **Host Processors** | Intel Core Ultra 9 275HX (Arrow Lake-HX), Meteor Lake-P | AMD Ryzen 6000/7000/8000 USB4, Intel Tiger/Alder Lake TB4 | Legacy USB 3.0 / USB 2.0 host ports |
-| **USB4 / TB Bridges** | **ASMedia ASM2464PD** (40 Gbps, PCIe Gen 4 x4) | Intel Goshen Ridge (JHL8440), Titan Ridge (JHL7440) | Realtek RTL9210, JMicron JMS583 (USB 3.2 UASP only) |
-| **Storage NVMe** | WD_BLACK SN7100 1TB (DRAM-less, HMB enabled) | Samsung 980/990 Pro, Crucial P3/T500, Kioxia Exceria | SATA M.2 SSDs (not PCIe tunneled) |
-| **Linux Kernels** | Linux **6.8.0** through **7.0.x** (Ubuntu generic) | Linux 6.9 – 6.14 mainline / distribution kernels | Kernels < 6.8 (regression not present) |
-| **Initramfs Engine**| **dracut** (Ubuntu 26.04, Fedora 39+, RHEL 9+) | **initramfs-tools** (Debian, Ubuntu 22.04/24.04 LTS) | **mkinitcpio** (Arch Linux), **rpm-ostree** (Silverblue) |
-| **Bootloader** | **GRUB2** (`update-grub`, `grub-mkconfig`) | `systemd-boot` (requires manual cmdline entry) | Legacy BIOS / MBR booting |
+Once the fix was applied, the drive negotiated native PCIe Gen 4 x4 over USB4:
+
+| Metric | Measured Value | Operational Impact |
+| :--- | :--- | :--- |
+| **Interface Mode** | Native NVMe (`/dev/nvme0n1p2`, ext4) | No USB/SCSI translation layer |
+| **Physical Link** | **16.0 GT/s PCIe Gen 4.0 x4 lanes** (~64 Gbps link) | Full speed, zero downshifting |
+| **Buffered Disk Read** | **`3,587.60 MB/s`** (via `hdparm -Tt /dev/nvme0n1`) | Saturates 40 Gbps USB4 wire ceiling |
+| **Direct Sequential Write**| **`2,024.33 MB/s`** (via `dd oflag=direct`) | Uncached direct flash write |
+| **Host Memory Buffer (HMB)**| **ACTIVE: 64 MiB host DDR5 RAM allocated** via Intel VT-d | Drops Write Amplification Factor from **6.80 to 1.88** (extends SSD lifespan from 4.8 to 17.5 years) |
+| **6-VM Sustained Bandwidth**| **`3,624.81 MB/s` combined** (2,187 MB/s Read + 1,437 MB/s Write) | 300s continuous concurrent I/O (`io_uring`) |
+| **Concurrent IOPS** | **`62,472 IOPS`** | Sub-1ms P50 latency (659–798 µs), P99 < 1.83 ms |
+| **Thermals under Load** | Peak **59 °C** controller / **57 °C** NAND | Well below the 70 °C throttling ceiling |
+| **Hardware Errors** | **0 AER errors, 0 IOMMU page faults, 0 NVMe timeouts** | Physical link locked in `L0` state |
+| **Internal Windows Drive** | Micron 2500 1TB SSD behind Intel VMD | **100% UNTOUCHED AND UNMOUNTED** |
 
 ---
 
-## ⚡ Quick Start: 3-Step Setup
+## Quickstart: How to Fix USB4 Direct-Boot
 
-### Step 1: Pre-Flight Audit (Non-destructive)
-Inspect your host, kernel version, and root partition without modifying any files:
+If you are setting up Ubuntu (or another dracut-based Linux distro) on an external USB4 SSD:
+
+### Step 1: Install Ubuntu via the Side Port
+Plug your drive into a standard **SIDE USB-C port** during OS installation. In USB 3.2 UASP mode, the drive shows up as `/dev/sda` and will install cleanly without PCIe tunneling errors. Boot into your fresh desktop.
+
+### Step 2: Run the Installer Script
+Open a terminal and run:
 ```bash
 git clone https://github.com/StickwoodJr/usb4-nvme-direct-boot.git
 cd usb4-nvme-direct-boot
-./setup_usb4_boot.sh --audit
-```
 
-### Step 2: Preview & Apply Configuration
-Preview planned drop-ins and then apply:
-```bash
-# Preview actions (zero writes):
+# 1. Inspect your hardware (safe, zero writes):
+./setup_usb4_boot.sh --audit
+
+# 2. Preview planned changes:
 ./setup_usb4_boot.sh --dry-run
 
-# Apply configuration & rebuild initramfs (requires sudo):
+# 3. Apply the fix and rebuild initramfs:
 sudo ./setup_usb4_boot.sh --apply
 ```
 
-### Step 3: Cold Boot Procedure
-1. Power off the system completely: `sudo poweroff`
-2. Unplug the AC power adapter and external drive.
-3. Hold the laptop power button down for **30 seconds** (discharges residual retimer capacitance).
-4. Reconnect AC power and plug the drive into the **rear USB4 / Thunderbolt 4 port**.
-5. Power on, tap **F12** (or your platform's boot menu key), and select the external NVMe.
-6. Verify runtime status once booted into the desktop:
-   ```bash
-   ./setup_usb4_boot.sh --verify
-   ```
+What the script does:
+- Adds `thunderbolt.host_reset=0`, `thunderbolt.clx=0`, and `pcie_port_pm=off` to `/etc/default/grub.d/99-usb4-transport.cfg` so the kernel won't reset the host router or drop the PCIe tunnel.
+- Installs the native dracut module (`99usb4-boot`) to authorize the USB4 device and rescan the PCIe bus early in boot before searching for the root filesystem.
+- Rebuilds your initial ramdisk with the required modules included.
+- Backs up your existing ramdisk so you can cleanly roll back at any time.
 
----
+### Step 3: The 30-Second Flea-Power Drain (Don't Skip This!)
+Modern laptops (especially Arrow Lake and Meteor Lake) retain electrical state in their Thunderbolt retimers across warm reboots. You have to drain residual power once so the hardware negotiates cleanly:
+1. Run `sudo poweroff`.
+2. Unplug the AC power adapter.
+3. **Hold the laptop power button down for 30 full seconds** (clears residual capacitance from the motherboard and retimers).
+4. Plug AC power back in.
+5. Plug your 40 Gbps cable into the **REAR USB4 Port** (next to the power jack).
+6. Power on, tap **F12**, and select your external NVMe drive (`Ubuntu`).
 
-## 🔄 First-Class Transactional Rollback
-
-All modifications can be cleanly and completely reversed at any time. The installer saves a backup of your original initial ramdisk and records an atomic transaction manifest in `/var/lib/usb4-direct-boot/transaction.manifest`.
-
+### Step 4: Verify Your Connection
+Once you are at your desktop, run:
 ```bash
-# Preview rollback actions:
-./setup_usb4_boot.sh --rollback --dry-run
+./setup_usb4_boot.sh --verify
+```
+You should see:
+- Storage Interface: Native PCIe Gen 4 x4 over USB4 (`/dev/nvme0n1`)
+- PCIe Link: 16.0 GT/s, width x4
+- Host Memory Buffer: Active (64 MB allocated via Intel VT-d)
 
-# Execute full reversal (restores pristine initrd & removes drop-ins):
+### 1-Click Rollback
+If you ever want to completely undo all changes and restore your original configuration:
+```bash
 sudo ./setup_usb4_boot.sh --rollback
 ```
 
 ---
 
-## 🔬 Technical Root Cause: The Teardown Cascade
+## Debian Package Installation (.deb)
 
-### The Upstream Defect (Linux 6.8+)
-In upstream Linux 6.8+, commit [`59a54c5f3dbd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59a54c5f3dbd) established an unconditional default policy setting `host_reset = true` within `drivers/thunderbolt/nhi.c`.
-
-Upstream maintainers intended this reset to clear inconsistent boot-firmware DisplayPort bandwidth allocations and reclaim exhausted AMD PCIe BAR space for docking stations. However, maintainers operated under the assumption that all USB4 devices are secondary, hotpluggable peripherals mounted after the operating system has already booted from internal storage.
-
-### The Execution Failure
-1. **UEFI POST:** The motherboard BIOS negotiates 40 Gbps and builds a PCIe Gen 4 x4 tunnel to the external NVMe SSD. GRUB loads the kernel and initial ramdisk across this tunnel.
-2. **Driver Probe (`nhi_probe`):** `thunderbolt.ko` initializes and calls `nhi_reset()`. On USB4 v2 host routers, this writes `REG_RESET_HRR` (`BIT(0)`) to `REG_RESET` (`0x39898`), executing a hardware Host Router Reset.
-3. **Tunnel Annihilation:** Register `ADP_PCIE_CS_0` bit `ADP_PCIE_CS_0_PE` (Path Enable) is cleared, physically severing the active PCIe tunnel.
-4. **Discovery Suppression (`tb_start`):** In `tb_start()`, `reset == true` sets `discover = false`, skipping `tb_discover_tunnels()` entirely.
-5. **Storage Deadlock (`nvme_probe`):** Concurrently, `nvme_probe()` attempts to access the device. Reads return Master Abort (`0xFFFFFFFF`), power transition `D3cold` to `D0` fails, and `nvme_probe()` aborts with terminal error `-ENODEV`. Linux driver core never re-probes endpoints that return `-ENODEV`, panicking the initial ramdisk (`ALERT! UUID=... does not exist`).
-
-### Upstream Status & Bug Trackers
-- **Launchpad Umbrella Tracker:** [Ubuntu Launchpad Bug LP #2167764](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2167764).
-- **Related Historical Trackers:** [LP #2078573](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2078573) (*Dell Latitude 5550*) and duplicate [LP #2159575](https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2159575) (*ASUS Zenbook 14, dracut*).
-- **Consolidated Defect Report:** Collaborative Launchpad defect submission draft in [`docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md`](docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md).
-- **Related Security Issue:** [CVE-2024-53194](https://nvd.nist.gov/vuln/detail/CVE-2024-53194) (*PCIe hotplug use-after-free triggered by host router resets*).
-- **Upstream LKML Proposal:** Formal patch modifying `drivers/thunderbolt/nhi.c` and `drivers/thunderbolt/tb.c` to preserve pre-boot PCIe tunnels for external boot storage is staged in [`patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch`](patches/0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch).
-- **Scope Clarification:** **This repository is a local workaround suite pending official upstream kernel changes.** It is not an officially accepted upstream kernel patch, nor a general Thunderbolt performance framework.
-
----
-
-## ⚠️ Known Side Effects & System Scope
-
-Disabling PCIe link power management and USB4 low-power lane states is an effective workaround to prevent link retraining drops, but it alters system-wide bus behavior. Review these documented side effects before deploying:
-
-| Subsystem / Scenario | Observed / Potential Side Effect | Technical Impact & Measurement | Mitigation / Recommendation |
-| :--- | :--- | :--- | :--- |
-| **Battery Life / Idle Power** | `pcie_port_pm=off` prevents PCIe root ports from entering runtime `D3cold`. | Laptop idle power consumption increases by **~1.2W to 2.8W** while running on battery. | Use AC power for high-performance direct-boot workloads; revert via `--rollback` if running on battery long-term. |
-| **Multi-Display Docks** | `thunderbolt.host_reset=0` preserves firmware tunnels instead of clearing them. | Complex daisy-chained docks (e.g. CalDigit TS4, Dell WD19TB/WD22TB4) may fail to negotiate full DisplayPort bandwidth (falling back to HBR2 instead of HBR3/DSC) if boot firmware allocated suboptimal tunnels. | Connect displays directly to laptop HDMI/DP or power-cycle the dock after boot. |
-| **System Suspend / Resume** | `thunderbolt.clx=0` keeps high-speed lanes out of CL0s/CL1 low-power states. | On certain platforms, modern standby (`s2idle`) may experience higher drain or occasional PCIe hotplug wake latency. | Test system suspend (`systemctl suspend`) after initial deployment. |
-| **Host Authorization (SL1/SL2)** | Machines with Thunderbolt Security Levels enabled in BIOS. | If user authorization is enforced by firmware, pre-boot tunnels are rejected unless the enclosure is enrolled in the host pre-boot ACL. | Boot via a standard USB 3.2 port (bypassing PCIe tunneling) on restricted corporate/institutional PCs. |
-
----
-
-
-## 🛠️ CLI Reference & Utility Scripts
+If you prefer installing via `apt` or `dpkg`, a standalone pre-built package is provided in `dist/`:
 
 ```bash
-./setup_usb4_boot.sh [COMMAND] [OPTIONS]
-```
-
-| Command / Script | Function / Scope |
-| :--- | :--- |
-| `setup_usb4_boot.sh --audit` | Read-only pre-flight audit of kernel, host model, controller, and UUID. |
-| `setup_usb4_boot.sh --dry-run` | Zero-mutation preview of files to be created and initramfs commands. |
-| `setup_usb4_boot.sh --apply` | Installs drop-ins, creates transaction manifest, and rebuilds initrd. |
-| `setup_usb4_boot.sh --rollback` | Completely reverses all configuration changes and restores backup initrd. |
-| `setup_usb4_boot.sh --verify` | Runtime check of PCIe link speed (16.0 GT/s), width (x4), and HMB status. |
-| `setup_usb4_boot.sh --health` | Audits SMART attributes, drive temperature, TBW endurance, and HMB state. |
-| `packaging/build_deb.sh` | Builds standalone `.deb` package (`dist/usb4-nvme-direct-boot_1.0.0_all.deb`). |
-| `scripts/apply_kernel_patch.sh` | Helper tool to validate/apply upstream LKML C patch to Linux trees. |
-| `tests/run_all_tests.sh` | Master automated test suite (CLI flags, kernel patch validation, .deb build). |
-
-
----
-
-### Standalone Debian/Ubuntu Package (`.deb`)
-
-For systems requiring distribution package tracking instead of executing raw shell scripts:
-
-```bash
-# Build the package locally
-./packaging/build_deb.sh
-
-# Install via dpkg/apt
 sudo dpkg -i dist/usb4-nvme-direct-boot_1.0.0_all.deb
-
-# Once installed, management is available globally via:
-sudo usb4-boot-config --audit
-sudo usb4-boot-config --dry-run
-sudo usb4-boot-config --apply
 ```
+The package automatically deploys the GRUB configuration, registers the dracut module, and runs `update-grub` / `update-initramfs`.
 
 ---
 
-## 📁 Repository Directory Structure
+## Detailed Troubleshooting Journey & Technical Postmortem
+
+I wrote a comprehensive breakdown of the entire engineering discovery process in [`docs/TROUBLESHOOTING_JOURNEY.md`](docs/TROUBLESHOOTING_JOURNEY.md).
+
+It covers:
+- **The Cable Paradox:** Why high-speed cables trigger AER storms on un-tuned links while cheap cables fall back to UASP.
+- **The DRAM-Less SSD Trap:** How UASP mode disables Host Memory Buffer (HMB) and causes severe flash write amplification on drives like the WD SN7100.
+- **The Kernel Trace:** How commit `59a54c5f3dbd` introduced `nhi_reset()` and why it breaks external boot storage.
+- **The Dracut Migration:** Why Ubuntu 26.04's transition from `initramfs-tools` to `dracut` broke all traditional rescan tutorials.
+- **The Multi-VM Stress Test:** Full methodology and fio configuration for testing 6 concurrent server VMs.
+
+---
+
+## Hardware Tested & Supported
+
+| Component | Tested Hardware / Version |
+| :--- | :--- |
+| **Host System** | Alienware 16X Aurora (Model AC16251, Intel Core Ultra 9 275HX Arrow Lake-HX) |
+| **External SSD** | Western Digital WD_BLACK SN7100 1TB (Firmware `7619M0WD`, DRAM-less BiCS8 TLC) |
+| **Enclosure** | UGREEN CA-15976 Tool-Free 40 Gbps Enclosure with PWM Turbo Fan |
+| **Bridge Chip** | ASMedia ASM2464PD USB4-to-PCIe Gen 4 x4 Bridge (Factory FW `85.xx.xx`) |
+| **Operating System** | Ubuntu 26.04.1 LTS (Linux Kernel `7.0.0-31-generic` and `7.0.0-38-generic`) |
+| **Initramfs System** | dracut 110-11 (`dracut-core`) |
+
+*Also applicable to other USB4 laptops (Dell Latitude, ASUS Zenbook, Lenovo ThinkPad) experiencing boot drops with ASM2464PD enclosures.*
+
+---
+
+## Repository Structure
 
 ```
 usb4-nvme-direct-boot/
-├── README.md                          # Documentation and support matrix
-├── setup_usb4_boot.sh                 # Unified CLI management entrypoint
-├── CONTRIBUTING.md                    # Guidelines for testing and submitting patches
-├── LICENSE                            # MIT License
-├── .gitignore                         # Git ignore rules
+├── README.md                                          # This documentation
+├── setup_usb4_boot.sh                                 # Turnkey management CLI (--audit, --apply, --verify, --rollback)
+├── LICENSE                                            # MIT License
 │
-├── packaging/                         # Debian packaging scripts & metadata
-│   ├── build_deb.sh                   # Automated .deb builder
-│   └── debian/DEBIAN/control          # Package control metadata
+├── docs/                                              # In-depth technical documentation
+│   ├── TROUBLESHOOTING_JOURNEY.md                     # Complete narrative postmortem & discovery timeline
+│   ├── ANTIGRAVITY_AGENT_HANDOVER_REPORT.md           # 5-phase bare-metal verification & 6-VM test results
+│   ├── HARDWARE_ARCHITECTURE.md                       # Electrical and controller hardware specs
+│   ├── FRESH_INSTALL_PLAYBOOK.md                      # Guide for setting up new Linux installs
+│   └── TROUBLESHOOTING.md                             # Quick diagnostics and FAQ
 │
-├── scripts/                           # Core implementation scripts
-│   ├── apply_usb4_direct_boot_fix.sh  # Transaction-aware installer (dracut & initramfs-tools)
-│   ├── rollback_usb4_fix.sh           # Atomic rollback script restoring pre-change state
-│   ├── verify_usb4_environment.sh     # Hardware link speed, width, and parameter verification
-│   ├── verify_initrd_contents.sh      # Initial ramdisk driver manifest validator
-│   └── nvme_health_audit.sh           # SMART health, TBW, and HMB telemetry reader
+├── modules.d/                                         # Dracut module sources
+│   └── 99usb4-boot/
+│       ├── module-setup.sh                            # Dracut module descriptor
+│       ├── 80-usb4-storage.rules                      # Early udev authorization rule
+│       ├── usb4-pre-trigger.sh                        # Early PCIe rescan hook
+│       └── usb4-storage-authorizer                    # Device authorization script
 │
-├── tests/                             # Automated test suite
-│   ├── run_all_tests.sh               # Master test runner
-│   ├── test_cli.sh                    # CLI argument and flag verification harness
-│   ├── test_patch_validation.sh       # Linux kernel patch structure and diff validator
-│   └── test_deb_packaging.sh          # Debian package builder & payload test
+├── scripts/                                           # Production maintenance and audit scripts
+│   ├── apply_usb4_direct_boot_fix.sh                  # Core setup engine
+│   ├── rollback_usb4_fix.sh                           # Clean uninstaller
+│   ├── verify_usb4_environment.sh                     # Hardware link & HMB audit tool
+│   ├── nvme_health_audit.sh                           # SMART health, temperature, and wear monitor
+│   └── verify_initrd_contents.sh                      # Initrd CPIO inspector
 │
-├── patches/                           # Upstream Linux kernel proposals
-│   └── 0001-thunderbolt-preserve-pre-boot-pcie-tunnels.patch # Production C patch for drivers/thunderbolt/
+├── tests/                                             # Automated test harness
+│   ├── run_all_tests.sh                               # Test runner
+│   ├── test_cli.sh                                    # CLI test suite (9/9 automated tests)
+│   ├── test_deb_packaging.sh                          # Package build validator
+│   └── benchmark_6vms.sh                              # 6-VM concurrent storage stress benchmark
 │
-└── docs/                              # Detailed engineering documentation
-    ├── EXECUTIVE_SUMMARY.md           # 2-minute overview: what goes wrong, what we change, side effects
-    ├── FORENSIC_KERNEL_INVESTIGATION_REPORT.md # In-depth forensic whitepaper & LKML submission
-    ├── FRESH_INSTALL_PLAYBOOK.md      # Installation guide for new distributions
-    ├── HARDWARE_ARCHITECTURE.md       # Technical notes on USB4 tunneling, retimers, and HMB
-    └── TROUBLESHOOTING.md             # Common failure modes, recovery steps, and BIOS retimer physics
+├── packaging/                                         # Debian packaging files
+│   ├── build_deb.sh                                   # Package compiler script
+│   └── debian/DEBIAN/control                          # Package metadata
+│
+└── dist/
+    └── usb4-nvme-direct-boot_1.0.0_all.deb            # Compiled Debian package
 ```
 
 ---
 
-## ⚖️ License & Disclaimers
+## License
 
-Distributed under the [MIT License](LICENSE).
-
-This project is an independent open-source engineering investigation and workaround suite. It is not officially affiliated with Canonical Ltd., Intel Corporation, AMD, Western Digital, or ASMedia Technology Inc.
+MIT License. Feel free to use, modify, and distribute this for your own mobile workstations or lab environments.

@@ -57,14 +57,17 @@ fi
 # Copy documentation & license
 cp "${SCRIPT_DIR}/README.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 cp "${SCRIPT_DIR}/LICENSE" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/copyright"
+if [[ -f "${SCRIPT_DIR}/docs/TROUBLESHOOTING_JOURNEY.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/TROUBLESHOOTING_JOURNEY.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+fi
 if [[ -f "${SCRIPT_DIR}/docs/TROUBLESHOOTING.md" ]]; then
     cp "${SCRIPT_DIR}/docs/TROUBLESHOOTING.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 fi
-if [[ -f "${SCRIPT_DIR}/docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md" ]]; then
-    cp "${SCRIPT_DIR}/docs/FORENSIC_KERNEL_INVESTIGATION_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+if [[ -f "${SCRIPT_DIR}/docs/BARE_METAL_VERIFICATION_REPORT.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/BARE_METAL_VERIFICATION_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 fi
-if [[ -f "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" ]]; then
-    cp "${SCRIPT_DIR}/docs/UBUNTU_LAUNCHPAD_BUG_REPORT.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
+if [[ -f "${SCRIPT_DIR}/docs/HARDWARE_ARCHITECTURE.md" ]]; then
+    cp "${SCRIPT_DIR}/docs/HARDWARE_ARCHITECTURE.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
 fi
 if [[ -f "${SCRIPT_DIR}/docs/EXECUTIVE_SUMMARY.md" ]]; then
     cp "${SCRIPT_DIR}/docs/EXECUTIVE_SUMMARY.md" "${BUILD_DIR}/usr/share/doc/${PACKAGE_NAME}/"
